@@ -212,6 +212,18 @@ const PROVIDERS: &[ProviderSpec] = &[
         models: ANTHROPIC_MODELS,
     },
     ProviderSpec {
+        id: "anthropic-claude",
+        name: "Claude Pro/Max",
+        base_url: "https://api.anthropic.com/v1",
+        env_key: None,
+        api_backend: ApiBackend::Messages,
+        auth_scheme: AuthScheme::Bearer,
+        anthropic_version: Some("2023-06-01"),
+        requires_auth: true,
+        local_probe: false,
+        models: ANTHROPIC_MODELS,
+    },
+    ProviderSpec {
         id: "openrouter",
         name: "OpenRouter",
         base_url: "https://openrouter.ai/api/v1",
@@ -257,16 +269,32 @@ pub fn provider_by_id(id: &str) -> Option<&'static ProviderSpec> {
     PROVIDERS.iter().find(|p| p.id == id)
 }
 
-/// Match a sampling `base_url` to a builtin vendor (prefix, slash-insensitive).
-pub(crate) fn provider_id_for_base_url(base_url: &str) -> Option<&'static str> {
+fn url_matches_provider(base_url: &str, provider: &ProviderSpec) -> bool {
     let url = base_url.trim().trim_end_matches('/');
     if url.is_empty() {
-        return None;
+        return false;
     }
-    PROVIDERS.iter().find_map(|provider| {
-        let base = provider.base_url.trim_end_matches('/');
-        (url == base || url.starts_with(&format!("{base}/"))).then_some(provider.id)
-    })
+    let base = provider.base_url.trim_end_matches('/');
+    url == base || url.starts_with(&format!("{base}/"))
+}
+
+/// All builtin vendors that own this sampling URL (Claude Pro shares Anthropic's host).
+pub(crate) fn provider_ids_for_base_url(base_url: &str) -> Vec<&'static str> {
+    PROVIDERS
+        .iter()
+        .filter(|provider| url_matches_provider(base_url, provider))
+        .map(|provider| provider.id)
+        .collect()
+}
+
+/// Match a sampling `base_url` to a builtin vendor (prefix, slash-insensitive).
+/// When several providers share a host, prefer one that currently has credentials.
+pub(crate) fn provider_id_for_base_url(base_url: &str) -> Option<&'static str> {
+    let ids = provider_ids_for_base_url(base_url);
+    ids.iter()
+        .copied()
+        .find(|id| store_has_provider(id))
+        .or_else(|| ids.first().copied())
 }
 
 pub fn provider_display_name(id: &str) -> String {

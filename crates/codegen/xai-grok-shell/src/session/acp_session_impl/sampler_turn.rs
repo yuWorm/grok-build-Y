@@ -438,14 +438,15 @@ impl SessionActor {
         // Vendor URLs (Codex, OpenRouter, …) own their bearer in
         // vendor-auth.json. Never substitute the xAI session JWT — that 401s
         // ChatGPT and the pager then prompts `/login`.
-        let vendor_id = crate::compat::vendor_id_for_base_url(&cfg.base_url);
+        let vendor_id =
+            crate::compat::vendor_id_for_url_and_scheme(&cfg.base_url, model_facts.auth_scheme);
         let use_bearer_resolver = vendor_id.is_none() && gate.active();
         self.log_auth_gate_unknown("reconstruct_full_config", gate, &cfg.base_url);
         if use_bearer_resolver && let Some(am) = self.auth_manager.as_ref() {
             let _ = am.auth().await;
         }
-        let api_key = if vendor_id.is_some() {
-            crate::compat::live_vendor_key_for_url(&cfg.base_url).or(creds.api_key)
+        let api_key = if let Some(id) = vendor_id.as_deref() {
+            crate::compat::live_vendor_key_for_id(id).or(creds.api_key)
         } else if use_bearer_resolver {
             self.auth_manager
                 .as_ref()

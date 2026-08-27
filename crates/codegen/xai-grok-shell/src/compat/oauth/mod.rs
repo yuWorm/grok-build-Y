@@ -2,6 +2,7 @@
 //!
 //! Flows live here, not in `AuthManager`. Tokens go to `vendor-auth.json`.
 
+mod anthropic_claude;
 mod callback;
 mod openai_codex;
 mod openrouter;
@@ -20,13 +21,17 @@ pub struct OAuthPending {
 }
 
 pub fn has_flow(provider_id: &str) -> bool {
-    matches!(provider_id, "openrouter" | "openai-codex")
+    matches!(
+        provider_id,
+        "openrouter" | "openai-codex" | "anthropic-claude"
+    )
 }
 
 pub fn login_label(provider_id: &str) -> Option<&'static str> {
     match provider_id {
         "openrouter" => Some(openrouter_login_label()),
         "openai-codex" => Some(openai_codex::login_label()),
+        "anthropic-claude" => Some(anthropic_claude::login_label()),
         _ => None,
     }
 }
@@ -35,6 +40,7 @@ pub async fn begin(provider_id: &str) -> Result<OAuthPending, VendorLoginError> 
     match provider_id {
         "openrouter" => begin_openrouter().await,
         "openai-codex" => openai_codex::begin().await,
+        "anthropic-claude" => anthropic_claude::begin().await,
         other => Err(VendorLoginError::Probe(format!(
             "OAuth is not wired for '{other}' yet"
         ))),
@@ -45,6 +51,7 @@ pub async fn wait_completion(provider_id: &str) -> Result<(), VendorLoginError> 
     match provider_id {
         "openrouter" => openrouter::wait_completion(provider_id).await,
         "openai-codex" => openai_codex::wait_completion(provider_id).await,
+        "anthropic-claude" => anthropic_claude::wait_completion(provider_id).await,
         other => Err(VendorLoginError::UnknownProvider(other.to_owned())),
     }
 }
@@ -53,6 +60,7 @@ pub fn submit_manual(provider_id: &str, input: &str) -> Result<(), VendorLoginEr
     match provider_id {
         "openrouter" => openrouter::submit_manual(provider_id, input.to_owned()),
         "openai-codex" => openai_codex::submit_manual(provider_id, input.to_owned()),
+        "anthropic-claude" => anthropic_claude::submit_manual(provider_id, input.to_owned()),
         other => Err(VendorLoginError::UnknownProvider(other.to_owned())),
     }
 }
@@ -61,23 +69,32 @@ pub fn cancel(provider_id: &str) {
     match provider_id {
         "openrouter" => openrouter::cancel(provider_id),
         "openai-codex" => openai_codex::cancel(provider_id),
+        "anthropic-claude" => anthropic_claude::cancel(provider_id),
         _ => {}
     }
 }
 
 /// Refresh expiring OAuth access tokens before a live request.
 pub fn ensure_fresh(provider_id: &str) {
-    if provider_id == openai_codex::PROVIDER_ID {
-        if let Err(error) = openai_codex::refresh_if_needed() {
-            tracing::warn!(provider_id, error = %error, "vendor OAuth refresh failed");
-        }
+    let result = if provider_id == openai_codex::PROVIDER_ID {
+        Some(openai_codex::refresh_if_needed())
+    } else if provider_id == anthropic_claude::PROVIDER_ID {
+        Some(anthropic_claude::refresh_if_needed())
+    } else {
+        None
+    };
+    if let Some(Err(error)) = result {
+        tracing::warn!(provider_id, error = %error, "vendor OAuth refresh failed");
     }
 }
 
-/// Headers that must ride on every Codex (and similar) request.
+/// Headers that must ride on every Codex / Claude-subscription request.
 pub fn inject_request_headers(provider_id: &str, headers: &mut indexmap::IndexMap<String, String>) {
     if provider_id == openai_codex::PROVIDER_ID {
         openai_codex::inject_request_headers(headers);
+    }
+    if provider_id == anthropic_claude::PROVIDER_ID {
+        anthropic_claude::inject_request_headers(headers);
     }
 }
 
@@ -138,5 +155,15 @@ mod tests {
             Some("Sign in with ChatGPT Plus/Pro (Codex)")
         );
         assert!(!has_flow("openai"));
+    }
+
+    #[test]
+    fn anthropic_claude_has_oauth_flow() {
+        assert!(has_flow("anthropic-claude"));
+        assert_eq!(
+            login_label("anthropic-claude"),
+            Some("Sign in with Claude Pro/Max")
+        );
+        assert!(!has_flow("anthropic"));
     }
 }

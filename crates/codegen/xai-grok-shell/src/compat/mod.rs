@@ -18,6 +18,7 @@ pub use catalog::{
 pub use probe::{VendorLoginError, login_with_api_key, logout_provider, probe_api_key};
 
 use crate::agent::config::ModelEntry;
+use xai_grok_sampler::AuthScheme;
 
 /// Look up a vendor API key for a catalog model (`model_family` = provider id).
 pub fn vendor_key_for_model(model: &ModelEntry) -> Option<String> {
@@ -51,14 +52,38 @@ pub fn vendor_id_for_base_url(base_url: &str) -> Option<String> {
         .or_else(|| custom::provider_id_for_base_url(base_url))
 }
 
+/// Same host can be API-key Anthropic (`x-api-key`) and Claude Pro OAuth
+/// (Bearer). Pick the slot that matches this request's auth scheme.
+pub fn vendor_id_for_url_and_scheme(base_url: &str, scheme: AuthScheme) -> Option<String> {
+    let ids = catalog::provider_ids_for_base_url(base_url);
+    if ids.is_empty() {
+        return custom::provider_id_for_base_url(base_url);
+    }
+    let store = VendorAuthStore::default_store().ok();
+    let matching: Vec<&'static str> = ids
+        .into_iter()
+        .filter(|id| catalog::provider_by_id(id).is_some_and(|p| p.auth_scheme == scheme))
+        .collect();
+    matching
+        .iter()
+        .copied()
+        .find(|id| store.as_ref().is_some_and(|s| s.has_provider(id)))
+        .or_else(|| matching.first().copied())
+        .map(str::to_owned)
+        .or_else(|| vendor_id_for_base_url(base_url))
+}
+
 /// Refresh-on-read vendor bearer for a live request. `None` if the URL is
 /// not a vendor endpoint or the sidecar has no usable secret.
 pub fn live_vendor_key_for_url(base_url: &str) -> Option<String> {
-    let id = vendor_id_for_base_url(base_url)?;
-    oauth::ensure_fresh(&id);
+    live_vendor_key_for_id(&vendor_id_for_base_url(base_url)?)
+}
+
+pub fn live_vendor_key_for_id(id: &str) -> Option<String> {
+    oauth::ensure_fresh(id);
     VendorAuthStore::default_store()
         .ok()?
-        .api_key(&id)
+        .api_key(id)
         .filter(|k| !k.trim().is_empty())
 }
 
@@ -80,6 +105,30 @@ mod tests {
             Some("openai-codex")
         );
         assert_eq!(vendor_id_for_base_url("https://api.x.ai/v1"), None);
+    }
+
+    #[test]
+    fn anthropic_url_stays_api_key_provider_without_oauth_slot() {
+        assert_eq!(
+            vendor_id_for_base_url("https://api.anthropic.com/v1").as_deref(),
+            Some("anthropic")
+        );
+        assert_eq!(
+            super::vendor_id_for_url_and_scheme(
+                "https://api.anthropic.com/v1",
+                super::AuthScheme::Bearer,
+            )
+            .as_deref(),
+            Some("anthropic-claude")
+        );
+        assert_eq!(
+            super::vendor_id_for_url_and_scheme(
+                "https://api.anthropic.com/v1",
+                super::AuthScheme::XApiKey,
+            )
+            .as_deref(),
+            Some("anthropic")
+        );
     }
 
     #[test]

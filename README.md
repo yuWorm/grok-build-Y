@@ -43,6 +43,7 @@ groky
 | xAI Grok | `/login` — same flow as official Grok Build |
 | OpenAI / Anthropic / OpenRouter API key | `/provider-login` then pick the provider |
 | ChatGPT Codex (Plus/Pro, not an `sk-` key) | `/provider-login openai-codex` |
+| Claude Pro/Max (not an `sk-ant-` key) | `/provider-login anthropic-claude` |
 | Custom OpenAI-compatible endpoint | `/provider-login` → custom provider |
 | Switch model | `/model` |
 | Drop a vendor key | `/provider-logout` |
@@ -59,6 +60,7 @@ A vendor 401 asks for `/provider-login`, not `/login`.
 | Multi-provider catalog and custom providers | Agent loop, tools, MCP, ACP |
 | `/provider-login`, `/provider-logout`, `/sync-models-dev` | `/login`, Welcome, `auth.json` |
 | ChatGPT Codex OAuth (`openai-codex`) | Official `grok` CDN install and auto-update |
+| Claude Pro/Max OAuth (`anthropic-claude`) | Anthropic console API keys (`anthropic`) |
 | models.dev reasoning / context overlay | Default auto-compact threshold (85%) |
 | Binary name `groky` (`~/.groky/bin`) | Rewriting the TUI as a different product |
 

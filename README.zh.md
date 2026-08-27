@@ -41,6 +41,7 @@ groky
 | xAI Grok | `/login` —— 与官方 Grok Build 相同 |
 | OpenAI / Anthropic / OpenRouter API key | `/provider-login` 再选供应商 |
 | ChatGPT Codex（Plus/Pro，不是 `sk-`） | `/provider-login openai-codex` |
+| Claude Pro/Max（不是 `sk-ant-`） | `/provider-login anthropic-claude` |
 | 自定义 OpenAI 兼容端点 | `/provider-login` → 自定义供应商 |
 | 切换模型 | `/model` |
 | 去掉供应商密钥 | `/provider-logout` |
@@ -57,6 +58,7 @@ xAI 登录未改（`AuthManager`、`~/.grok/auth.json`）。第三方密钥不�
 | 多供应商目录、自定义供应商 | agent 循环、tools、MCP、ACP |
 | `/provider-login`、`/provider-logout`、`/sync-models-dev` | `/login`、Welcome、`auth.json` |
 | ChatGPT Codex OAuth（`openai-codex`） | 官方 `grok` 的 CDN 安装和自更新 |
+| Claude Pro/Max OAuth（`anthropic-claude`） | Anthropic 控制台 API key（`anthropic`） |
 | models.dev 推理档 / 上下文窗口 overlay | 默认压缩阈值（85%） |
 | 二进制名 `groky`（`~/.groky/bin`） | 把 TUI 重写成另一套产品 |
 
