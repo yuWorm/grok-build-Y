@@ -141,7 +141,7 @@ jobs:
 
           One-click install:
           \`\`\`sh
-          curl -fsSL https://raw.githubusercontent.com/yuWorm/grok-build-Y/main/scripts/install-groky.sh | bash
+          curl -fsSL https://raw.githubusercontent.com/yuWorm/groky/main/scripts/install-groky.sh | bash
           \`\`\`
           "
           if gh release view "$tag" >/dev/null 2>&1; then

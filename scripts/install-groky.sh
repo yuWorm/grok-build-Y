@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
-# groky installer — product CLI for yuWorm/grok-build-Y
+# groky installer — product CLI for yuWorm/groky
 #
 # Does not call x.ai/cli (that installs official `grok`). Downloads a GitHub
 # Release asset named like grok's gh-release pattern:
 #   groky-{version}-{macos|linux|windows}-{x86_64|aarch64}[.exe]
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/yuWorm/grok-build-Y/main/scripts/install-groky.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/yuWorm/groky/main/scripts/install-groky.sh | bash
 #   curl -fsSL ... | bash -s 0.1.0
 #   GROKY_VERSION=0.1.0 GROKY_BIN_DIR=$HOME/.local/bin bash scripts/install-groky.sh
 #
-# Env: GROKY_REPO (default yuWorm/grok-build-Y), GROKY_VERSION, GROKY_BIN_DIR,
+# Env: GROKY_REPO (default yuWorm/groky), GROKY_VERSION, GROKY_BIN_DIR,
 #      GROKY_GITHUB_TOKEN (optional; raises API rate limit)
 
 set -euo pipefail
 
-REPO="${GROKY_REPO:-yuWorm/grok-build-Y}"
+REPO="${GROKY_REPO:-yuWorm/groky}"
 BIN_NAME="groky"
 BIN_DIR="${GROKY_BIN_DIR:-$HOME/.groky/bin}"
 TARGET="${1:-${GROKY_VERSION:-}}"

@@ -1,6 +1,6 @@
 # Install groky
 
-`groky` is the product CLI for this fork ([yuWorm/grok-build-Y](https://github.com/yuWorm/grok-build-Y)).
+`groky` is the product CLI for this fork ([yuWorm/groky](https://github.com/yuWorm/groky)).
 It is the same TUI as Grok Build (`xai-grok-pager-bin`), shipped under a
 different binary name so it can sit next to official `grok`.
 
@@ -11,14 +11,14 @@ Config, sessions, and vendor credentials still live under `~/.grok/`
 ## One-click
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/yuWorm/grok-build-Y/main/scripts/install-groky.sh | bash
+curl -fsSL https://raw.githubusercontent.com/yuWorm/groky/main/scripts/install-groky.sh | bash
 groky --version
 ```
 
 Windows PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/yuWorm/grok-build-Y/main/scripts/install-groky.ps1 | iex
+irm https://raw.githubusercontent.com/yuWorm/groky/main/scripts/install-groky.ps1 | iex
 ```
 
 Pin a version: `bash -s 0.1.0` or `$env:GROKY_VERSION="0.1.0"`.

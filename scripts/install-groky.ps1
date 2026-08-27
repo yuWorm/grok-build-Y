@@ -1,8 +1,8 @@
 #
 # groky installer for Windows PowerShell
-# https://github.com/yuWorm/grok-build-Y
+# https://github.com/yuWorm/groky
 #
-#   irm https://raw.githubusercontent.com/yuWorm/grok-build-Y/main/scripts/install-groky.ps1 | iex
+#   irm https://raw.githubusercontent.com/yuWorm/groky/main/scripts/install-groky.ps1 | iex
 #   $env:GROKY_VERSION="0.1.0"; irm ... | iex
 #
 
@@ -17,7 +17,7 @@ $ProgressPreference = 'SilentlyContinue'
 
 if (-not $Version -and $env:GROKY_VERSION) { $Version = $env:GROKY_VERSION }
 
-$Repo = if ($env:GROKY_REPO) { $env:GROKY_REPO } else { 'yuWorm/grok-build-Y' }
+$Repo = if ($env:GROKY_REPO) { $env:GROKY_REPO } else { 'yuWorm/groky' }
 $BinDir = if ($env:GROKY_BIN_DIR) { $env:GROKY_BIN_DIR } else { Join-Path $env:USERPROFILE '.groky\bin' }
 
 $headers = @{ 'Accept' = 'application/vnd.github+json'; 'X-GitHub-Api-Version' = '2022-11-28' }
