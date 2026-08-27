@@ -95,6 +95,14 @@ jobs:
           key: groky-${{ matrix.rust_target }}
           cache-targets: true
 
+      - name: Portable ARM baseline (C deps + jemalloc)
+        if: matrix.rust_target == 'aarch64-unknown-linux-gnu'
+        run: |
+          # Host gcc on ubuntu-24.04-arm is Ampere/Neoverse; without this,
+          # jemalloc C objects still contain LSE and SIGILL on Cortex-A72.
+          echo "CFLAGS=-march=armv8-a" >> "$GITHUB_ENV"
+          echo "CXXFLAGS=-march=armv8-a" >> "$GITHUB_ENV"
+
       - name: Build groky
         run: |
           cargo build -p xai-grok-pager-bin --locked --release --bin groky --target ${{ matrix.rust_target }} --features release-dist

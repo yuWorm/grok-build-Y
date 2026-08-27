@@ -35,7 +35,10 @@ rustflags = [
 rustflags = ["-C", "force-unwind-tables=yes"]
 
 [target.aarch64-unknown-linux-gnu]
-rustflags = ["-C", "target-cpu=neoverse-v2", "-C", "force-unwind-tables=yes"]
+# GROK_COMPAT_HOOK: upstream pins neoverse-v2 (Graviton4 / xAI fleet). That
+# emits SVE2 and other ARMv9 ops; Raspberry Pi, Asahi, and generic Debian
+# ARM SIGILL on `--version`. groky ships to those hosts.
+rustflags = ["-C", "target-cpu=generic", "-C", "force-unwind-tables=yes"]
 
 [target.x86_64-unknown-linux-musl]
 rustflags = [
