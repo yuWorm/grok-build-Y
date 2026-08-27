@@ -30,6 +30,9 @@ jobs:
   build:
     name: groky ${{ matrix.artifact_os }}-${{ matrix.artifact_arch }}
     runs-on: ${{ matrix.runner }}
+    # Upstream does not ship a Windows-tested tree; keep the job but don't
+    # block a Unix release if protoc/dotslash still fails on MSVC.
+    continue-on-error: ${{ matrix.optional }}
     strategy:
       fail-fast: false
       matrix:
@@ -38,23 +41,28 @@ jobs:
             artifact_os: macos
             artifact_arch: aarch64
             rust_target: aarch64-apple-darwin
+            optional: false
           - runner: macos-14
             artifact_os: macos
             artifact_arch: x86_64
             rust_target: x86_64-apple-darwin
+            optional: false
           - runner: ubuntu-24.04
             artifact_os: linux
             artifact_arch: x86_64
             rust_target: x86_64-unknown-linux-gnu
+            optional: false
           - runner: ubuntu-24.04-arm
             artifact_os: linux
             artifact_arch: aarch64
             rust_target: aarch64-unknown-linux-gnu
+            optional: false
           - runner: windows-latest
             artifact_os: windows
             artifact_arch: x86_64
             rust_target: x86_64-pc-windows-msvc
             exe: ".exe"
+            optional: true
 
     steps:
       - uses: actions/checkout@v5
@@ -69,7 +77,13 @@ jobs:
 
       - name: Install protobuf (Windows)
         if: runner.os == 'Windows'
-        run: choco install protoc -y
+        shell: pwsh
+        run: |
+          choco install protoc -y
+          # Repo `bin/protoc` is a Unix DotSlash stub (Win32 error 193).
+          Remove-Item -Force bin/protoc, bin/protoc.exe -ErrorAction SilentlyContinue
+          $protoc = (Get-Command protoc -ErrorAction Stop).Source
+          Add-Content -Path $env:GITHUB_ENV -Value "PROTOC=$protoc"
 
       - uses: dtolnay/rust-toolchain@master
         with:
@@ -115,6 +129,7 @@ jobs:
 
   release:
     needs: build
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
@@ -137,6 +152,12 @@ jobs:
             git push origin "refs/tags/$tag" 2>/dev/null || true
           fi
           ls -la dist
+          shopt -s nullglob
+          assets=(dist/groky-*)
+          if [[ ${#assets[@]} -eq 0 ]]; then
+            echo "No groky artifacts uploaded; refusing to publish an empty release." >&2
+            exit 1
+          fi
           notes="groky ${tag#v}
 
           One-click install:
