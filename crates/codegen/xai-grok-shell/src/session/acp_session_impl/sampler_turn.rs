@@ -435,12 +435,18 @@ impl SessionActor {
         let auth_method = self.auth_method_id.load();
         let gate =
             SessionTokenAuthGate::new(auth_method.as_deref(), model_facts.byok, &cfg.base_url);
-        let use_bearer_resolver = gate.active();
+        // Vendor URLs (Codex, OpenRouter, …) own their bearer in
+        // vendor-auth.json. Never substitute the xAI session JWT — that 401s
+        // ChatGPT and the pager then prompts `/login`.
+        let vendor_id = crate::compat::vendor_id_for_base_url(&cfg.base_url);
+        let use_bearer_resolver = vendor_id.is_none() && gate.active();
         self.log_auth_gate_unknown("reconstruct_full_config", gate, &cfg.base_url);
         if use_bearer_resolver && let Some(am) = self.auth_manager.as_ref() {
             let _ = am.auth().await;
         }
-        let api_key = if use_bearer_resolver {
+        let api_key = if vendor_id.is_some() {
+            crate::compat::live_vendor_key_for_url(&cfg.base_url).or(creds.api_key)
+        } else if use_bearer_resolver {
             self.auth_manager
                 .as_ref()
                 .and_then(|am| am.current_wire_valid().map(|a| a.key))
@@ -449,6 +455,9 @@ impl SessionActor {
         };
         let auth_scheme = model_facts.auth_scheme;
         let mut extra_headers = cfg.extra_headers;
+        if let Some(id) = vendor_id.as_deref() {
+            crate::compat::oauth::inject_request_headers(id, &mut extra_headers);
+        }
         crate::agent::config::inject_url_derived_headers(
             &mut extra_headers,
             creds.alpha_test_key.as_deref(),
@@ -801,6 +810,44 @@ impl SessionActor {
             message, STATUS,
         ))
     }
+    /// Codex / OpenRouter / custom 401: do not run xAI `/login` recovery.
+    async fn surface_vendor_auth_failure(
+        &self,
+        provider_id: &str,
+        original: &str,
+        status_code: Option<u16>,
+    ) -> Result<SamplerFailureRecovery, acp::Error> {
+        let message = crate::compat::vendor_auth_user_message(provider_id);
+        tracing::warn!(
+            session_id = %self.session_info.id.0,
+            provider_id,
+            original,
+            "auth recovery: vendor 401 — skipping xAI session refresh"
+        );
+        xai_grok_telemetry::unified_log::warn(
+            "auth recovery: vendor 401 skipped xAI refresh",
+            Some(self.session_info.id.0.as_ref()),
+            Some(serde_json::json!({
+                "provider_id": provider_id,
+                "status_code": status_code,
+            })),
+        );
+        self.log_terminal_failure("vendor_auth", status_code, &message);
+        self.send_xai_notification(XaiSessionUpdate::RetryState(
+            crate::extensions::notification::RetryState::Failed {
+                error_type: "vendor_auth".to_string(),
+                message: message.clone(),
+            },
+        ))
+        .await;
+        Err(
+            acp::Error::internal_error().data(crate::sampling::error::terminal_error_data(
+                message,
+                status_code,
+                xai_grok_sampler::SamplingErrorKind::Auth,
+            )),
+        )
+    }
     fn log_terminal_failure(&self, error_type: &str, status_code: Option<u16>, message: &str) {
         let auth = self
             .auth_manager
@@ -927,12 +974,20 @@ impl SessionActor {
             .await
             .map(|c| (c.model, c.base_url))
             .unwrap_or_default();
-        let auth_provider =
-            if matches!(error.kind, SamplingErrorKind::Auth) || error.status_code == Some(401) {
-                self.model_auth_provider(&failed_model_id)
-            } else {
-                None
-            };
+        let is_auth_401 =
+            matches!(error.kind, SamplingErrorKind::Auth) || error.status_code == Some(401);
+        if is_auth_401
+            && let Some(provider_id) = crate::compat::vendor_id_for_base_url(&failed_base_url)
+        {
+            return self
+                .surface_vendor_auth_failure(&provider_id, &error.message, error.status_code)
+                .await;
+        }
+        let auth_provider = if is_auth_401 {
+            self.model_auth_provider(&failed_model_id)
+        } else {
+            None
+        };
         let auth_recovery_eligible = matches!(error.kind, SamplingErrorKind::Auth) && {
             let gate = self.auth_gate(&failed_model_id, &failed_base_url);
             let eligible = gate.active();

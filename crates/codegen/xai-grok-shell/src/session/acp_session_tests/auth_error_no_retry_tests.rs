@@ -213,6 +213,39 @@ async fn sampler_401_recovery_returns_refresh_and_retry() {
         .await;
 }
 
+/// ChatGPT Codex 401 must not refresh the xAI session token. That path
+/// retries with a grok.com JWT against chatgpt.com, 401s again, and the
+/// pager prompts `/login` — which cannot fix `vendor-auth.json`.
+#[tokio::test(flavor = "current_thread")]
+async fn sampler_401_on_codex_url_skips_xai_session_refresh() {
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let called = Arc::new(AtomicBool::new(false));
+            let refresher: Arc<dyn crate::auth::refresh::TokenRefresher> =
+                Arc::new(AlwaysSucceedRefresher {
+                    called: called.clone(),
+                });
+            let (_dir, am) = auth_manager_with_refresher(refresher);
+            let (actor, _rx) = make_actor_with_auth_manager(Some(am)).await;
+            let mut cfg = actor.chat_state_handle.get_sampling_config().await.unwrap();
+            cfg.base_url = "https://chatgpt.com/backend-api/codex".into();
+            cfg.model = "gpt-5.6-luna".into();
+            actor.chat_state_handle.update_sampling_config(cfg);
+
+            let result = actor.handle_sampling_failure(auth_error(), 0).await;
+            assert!(
+                result.is_err(),
+                "Codex 401 must surface a terminal vendor_auth error, not xAI retry"
+            );
+            assert!(
+                !called.load(Ordering::SeqCst),
+                "Codex 401 must NOT trigger an OIDC session-token refresh"
+            );
+        })
+        .await;
+}
+
 /// Regression: sampler 401 with API-key auth (BYOK `env_key` /
 /// `XAI_API_KEY`) must NOT attempt an OIDC session-token refresh. The
 /// bearer on the wire is the static API key, so refreshing the session

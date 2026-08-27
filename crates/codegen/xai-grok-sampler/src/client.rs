@@ -58,6 +58,19 @@ struct GrokRequestHeaders<'a> {
 }
 
 impl GrokRequestHeaders<'_> {
+    /// GROK_COMPAT_HOOK: Codex drops `x-grok-*` and sends session-affinity headers.
+    fn apply_for(
+        &self,
+        base_url: &str,
+        builder: reqwest::RequestBuilder,
+    ) -> reqwest::RequestBuilder {
+        if crate::compat::is_codex_responses_url(base_url) {
+            crate::compat::apply_codex_session_headers(builder, self.session_id)
+        } else {
+            self.apply(builder)
+        }
+    }
+
     fn apply(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         let mut b = builder
             .header("x-grok-conv-id", self.conv_id)
@@ -101,11 +114,18 @@ impl GrokRequestHeaders<'_> {
 /// `ResponseUsage` unchanged so billing telemetry stays correct. When
 /// the API doesn't emit `context_details` (older deployments) `total_tokens`
 /// passes through unchanged.
+#[cfg(test)]
 fn deserialize_response_event(data: &str) -> Result<rs::ResponseStreamEvent> {
+    deserialize_named_response_event("", data)
+}
+
+fn deserialize_named_response_event(
+    event_name: &str,
+    data: &str,
+) -> Result<rs::ResponseStreamEvent> {
     let mut event = match serde_json::from_str::<rs::ResponseStreamEvent>(data) {
         Ok(event) => event,
         Err(first_err) => {
-            // Try sanitizing: parse as Value, strip unknown tools, retry.
             if let Ok(mut value) = serde_json::from_str::<serde_json::Value>(data) {
                 // Strip tools that async_openai's rs::Tool can't deserialize
                 // (e.g., xAI-specific "x_search"). Instead of maintaining a
@@ -117,13 +137,17 @@ fn deserialize_response_event(data: &str) -> Result<rs::ResponseStreamEvent> {
                 {
                     tools.retain(|t| serde_json::from_value::<rs::Tool>(t.clone()).is_ok());
                 }
+                // GROK_COMPAT_HOOK begin
+                crate::compat::prepare_lenient_response_json(event_name, &mut value);
+                // GROK_COMPAT_HOOK end
                 if let Ok(mut event) = serde_json::from_value::<rs::ResponseStreamEvent>(value) {
                     apply_terminal_event_overrides(&mut event, data);
                     return Ok(event);
                 }
             }
-            tracing::error!(
+            tracing::warn!(
                 error = %first_err,
+                event_name,
                 raw_data = %data,
                 "Failed to deserialize ResponseStreamEvent from stream"
             );
@@ -1221,6 +1245,10 @@ impl SamplingClient {
             includes.push(rs::IncludeEnum::ReasoningEncryptedContent);
         }
 
+        // GROK_COMPAT_HOOK begin
+        crate::compat::prepare_codex_create_response(&self.base_url, &mut request.inner);
+        // GROK_COMPAT_HOOK end
+
         Ok(())
     }
 
@@ -1268,11 +1296,16 @@ impl SamplingClient {
         // it in post-serialize. This is the last surviving piece of the
         // old raw_output machinery.
         xai_grok_sampling_types::patch_reasoning_text_types(&mut request_body);
+        // GROK_COMPAT_HOOK begin
+        crate::compat::prepare_codex_request_json(&self.base_url, &mut request_body);
+        // GROK_COMPAT_HOOK end
         let SentRequest {
             builder,
             sent_bearer,
         } = self.post(self.endpoint("responses"));
-        let http_request = grok_headers.apply(builder).json(&request_body);
+        let http_request = grok_headers
+            .apply_for(&self.base_url, builder)
+            .json(&request_body);
 
         let response = http_request.send().await.map_err(|e| {
             tracing::debug!("HTTP request failed: {}", e);
@@ -1404,6 +1437,9 @@ impl SamplingClient {
         splice_extra_tool_entries(&mut request_body, extra_tool_entries);
         append_response_includes(&mut request_body, &self.defaults.extra_response_includes);
         xai_grok_sampling_types::patch_reasoning_text_types(&mut request_body);
+        // GROK_COMPAT_HOOK begin
+        crate::compat::prepare_codex_request_json(&self.base_url, &mut request_body);
+        // GROK_COMPAT_HOOK end
         // Fresh per attempt so signals never leak across retries; `None`
         // (check disabled) sends no header and does no peek work per event.
         let doom_loop = self
@@ -1415,9 +1451,12 @@ impl SamplingClient {
             sent_bearer,
         } = self.post(self.endpoint("responses"));
         let mut http_request = grok_headers
-            .apply(builder)
+            .apply_for(&self.base_url, builder)
             .header(ACCEPT, HeaderValue::from_static("text/event-stream"));
-        if let Some(policy) = self.defaults.doom_loop_recovery {
+        // GROK_COMPAT_HOOK: Codex 400s unknown `x-grok-*` headers.
+        if crate::compat::allows_xai_request_extensions(&self.base_url)
+            && let Some(policy) = self.defaults.doom_loop_recovery
+        {
             http_request =
                 http_request.header(DOOM_LOOP_CHECK_HEADER, policy.window_tokens.to_string());
         }
@@ -1542,7 +1581,21 @@ impl SamplingClient {
                         } else if let Some(stream_error) = try_parse_stream_error(data) {
                             Some(Some(Err(stream_error)))
                         } else {
-                            Some(Some(deserialize_response_event(data)))
+                            match deserialize_named_response_event(&event.event, data) {
+                                Ok(parsed) => Some(Some(Ok(parsed))),
+                                Err(error) => {
+                                    // GROK_COMPAT_HOOK: skip unknown SSE instead of
+                                    // failing a turn that already streamed output.
+                                    tracing::warn!(
+                                        target: crate::sampling_log::TARGET,
+                                        event = %event.event,
+                                        error = %error,
+                                        data = %data,
+                                        "skipping unparsed Responses SSE event"
+                                    );
+                                    Some(None)
+                                }
+                            }
                         }
                     }
                     Err(e) => {
@@ -3204,6 +3257,65 @@ mod tests {
             "logprobs": []
         }"#;
         let event = deserialize_response_event(sse).expect("non-terminal event parses");
+        assert!(matches!(
+            event,
+            rs::ResponseStreamEvent::ResponseOutputTextDelta(_)
+        ));
+    }
+
+    #[test]
+    fn deserialize_response_event_fills_missing_annotations_and_ids() {
+        // OpenAI-shaped completed event: no `annotations` on output_text,
+        // no `id` on reasoning/message. First-pass serde fails; the compat
+        // sanitizer fills the holes so the typed parse succeeds.
+        let sse = r#"{
+            "type": "response.completed",
+            "sequence_number": 0,
+            "response": {
+                "id": "resp_gpt",
+                "object": "response",
+                "created_at": 0,
+                "model": "gpt-5.6",
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "reasoning",
+                        "summary": [{ "type": "summary_text", "text": "think" }],
+                        "status": "completed"
+                    },
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "status": "completed",
+                        "content": [{
+                            "type": "output_text",
+                            "text": "Hi. What can I help you with?"
+                        }]
+                    }
+                ]
+            }
+        }"#;
+        let event = deserialize_response_event(sse).expect("compat parse");
+        let rs::ResponseStreamEvent::ResponseCompleted(e) = event else {
+            panic!("expected ResponseCompleted");
+        };
+        assert_eq!(e.response.output.len(), 2);
+        let rs::OutputItem::Message(msg) = &e.response.output[1] else {
+            panic!("expected message output item");
+        };
+        let rs::OutputMessageContent::OutputText(text) = &msg.content[0] else {
+            panic!("expected output_text");
+        };
+        assert_eq!(text.text, "Hi. What can I help you with?");
+        assert!(text.annotations.is_empty());
+        assert!(!msg.id.is_empty());
+    }
+
+    #[test]
+    fn named_sse_event_injects_missing_type() {
+        let data = r#"{"sequence_number":0,"item_id":"msg_1","output_index":0,"content_index":0,"delta":"Hi"}"#;
+        let event = deserialize_named_response_event("response.output_text.delta", data)
+            .expect("type injected from SSE event name");
         assert!(matches!(
             event,
             rs::ResponseStreamEvent::ResponseOutputTextDelta(_)

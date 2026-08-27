@@ -1207,8 +1207,14 @@ pub enum RetryState {
 /// `auth_transient` is excluded for the opposite reason: the shell emits it
 /// only when the failure self-heals (see `AuthManager::requires_manual_reauth`)
 /// and the message already says it recovers on its own — no `/login` banner.
+///
+/// `vendor_auth` is a third-party (Codex / OpenRouter / custom) 401: `/login`
+/// refreshes xAI `auth.json` and cannot fix `vendor-auth.json`.
 pub fn is_reauthable_failure(error_type: Option<&str>, message: &str) -> bool {
-    if matches!(error_type, Some("legacy_auth") | Some("auth_transient")) {
+    if matches!(
+        error_type,
+        Some("legacy_auth") | Some("auth_transient") | Some("vendor_auth")
+    ) {
         return false;
     }
     error_type == Some("auth") || message.contains("Unauthorized (401)")

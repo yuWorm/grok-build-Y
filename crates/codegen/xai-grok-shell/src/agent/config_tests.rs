@@ -1625,6 +1625,22 @@ fn has_own_credentials_guards_session_vs_external_key() {
         None,
     );
     assert!(config_model.has_own_credentials());
+    let mut codex = test_model_entry(
+        "gpt-5.6-luna",
+        "https://chatgpt.com/backend-api/codex",
+        None,
+        None,
+        None,
+    );
+    codex.info.model_family = Some("openai-codex".into());
+    assert!(
+        codex.has_own_credentials(),
+        "Codex catalog models must count as BYOK so xAI /login cannot steal the bearer"
+    );
+    assert_eq!(
+        byok_from_lookup(&ModelLookup::Loaded(Some(&codex))),
+        ModelByok::Byok,
+    );
 }
 /// The `ConfigUnavailable → Unknown` arm matters for safety: a transient
 /// config failure must not read as a definite `NotByok`, which would drive

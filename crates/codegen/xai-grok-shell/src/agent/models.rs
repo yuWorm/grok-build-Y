@@ -451,17 +451,22 @@ impl ModelsManager {
     // ── Accessors ───────────────────────────────────────────────────
 
     pub fn models(&self) -> IndexMap<String, ModelEntry> {
-        self.inner.catalog.read().models.clone()
+        self.merged_catalog_models()
+    }
+
+    fn merged_catalog_models(&self) -> IndexMap<String, ModelEntry> {
+        let mut models = self.inner.catalog.read().models.clone();
+        // GROK_COMPAT_HOOK begin
+        crate::compat::merge_vendor_catalog(&mut models);
+        crate::compat::reasoning::apply_overlay_to_vendor_entries(&mut models);
+        // GROK_COMPAT_HOOK end
+        models
     }
 
     /// One name without cloning the catalog, for callers on a hot path.
     pub fn display_name(&self, id: &str) -> Option<String> {
-        self.inner
-            .catalog
-            .read()
-            .models
-            .get(id)
-            .and_then(|entry| entry.info.name.clone())
+        self.with_catalog_entry(id, |entry| entry.info.name.clone())
+            .flatten()
     }
 
     pub fn endpoints(&self) -> config::EndpointsConfig {
@@ -478,11 +483,7 @@ impl ModelsManager {
 
     /// ACP-visible (non-hidden) projection of the catalog.
     pub fn available(&self) -> IndexMap<acp::ModelId, acp::ModelInfo> {
-        let snapshot = {
-            let cat = self.inner.catalog.read();
-            let models = &cat.models;
-            models.clone()
-        };
+        let snapshot = self.merged_catalog_models();
 
         let selectable: IndexMap<_, _> = snapshot
             .into_iter()
@@ -494,9 +495,8 @@ impl ModelsManager {
 
     pub(crate) fn task_model_error(&self, requested: &str) -> Option<String> {
         let is_session_auth = self.is_session_auth();
-        let cat = self.inner.catalog.read();
-        let models = &cat.models;
-        task_model_error_for_catalog(requested, models, is_session_auth)
+        let models = self.merged_catalog_models();
+        task_model_error_for_catalog(requested, &models, is_session_auth)
     }
 
     pub fn current_model_id(&self) -> acp::ModelId {
@@ -529,12 +529,7 @@ impl ModelsManager {
         &self,
         model_id: &str,
     ) -> config::LazinessDetectorPerModelConfig {
-        self.inner
-            .catalog
-            .read()
-            .models
-            .get(model_id)
-            .map(|e| e.info().laziness_detector.clone())
+        self.with_catalog_entry(model_id, |e| e.info().laziness_detector.clone())
             .unwrap_or_default()
     }
 
@@ -554,37 +549,64 @@ impl ModelsManager {
 
     /// Run `f` on the [`ModelEntry`] for `model_id` (catalog key or wire name); `None` if absent.
     fn with_catalog_entry<T>(&self, model_id: &str, f: impl FnOnce(&ModelEntry) -> T) -> Option<T> {
-        let cat = self.inner.catalog.read();
-        let models = &cat.models;
-        let key = resolve_catalog_key(models, &acp::ModelId::new(model_id))?;
-        models.get(key.0.as_ref()).map(f)
+        {
+            let cat = self.inner.catalog.read();
+            if let Some(key) = resolve_catalog_key(&cat.models, &acp::ModelId::new(model_id)) {
+                return cat.models.get(key.0.as_ref()).map(f);
+            }
+        }
+        // GROK_COMPAT_HOOK begin
+        let mut vendor = IndexMap::new();
+        crate::compat::merge_vendor_catalog(&mut vendor);
+        let key = resolve_catalog_key(&vendor, &acp::ModelId::new(model_id))?;
+        vendor.get(key.0.as_ref()).map(f)
+        // GROK_COMPAT_HOOK end
     }
 
     /// Whether the given model supports reasoning effort according to the catalog.
     pub(crate) fn model_supports_reasoning_effort(&self, model_id: &str) -> bool {
-        self.with_catalog_entry(model_id, |e| e.info().supports_reasoning_effort)
-            .unwrap_or(false)
+        self.with_catalog_entry(model_id, |e| {
+            if e.info().supports_reasoning_effort {
+                return true;
+            }
+            crate::compat::is_vendor_catalog_model(e)
+                && crate::compat::reasoning::model_supports(&e.info.model)
+        })
+        .unwrap_or(false)
     }
 
     /// The model's catalog default reasoning effort.
     pub(crate) fn model_default_reasoning_effort(&self, model_id: &str) -> Option<ReasoningEffort> {
-        self.with_catalog_entry(model_id, |e| e.info().reasoning_effort)
-            .flatten()
+        self.with_catalog_entry(model_id, |e| {
+            if crate::compat::is_vendor_catalog_model(e) {
+                if let Some(menu) = crate::compat::reasoning::lookup(&e.info.model) {
+                    let keep = e
+                        .info()
+                        .reasoning_effort
+                        .filter(|effort| menu.options.iter().any(|opt| opt.value == *effort));
+                    return Some(keep.unwrap_or(menu.default));
+                }
+            }
+            e.info().reasoning_effort
+        })
+        .flatten()
     }
 
     /// The raw catalog `reasoning_efforts` list for `model_id` with no fallback,
     pub(crate) fn model_reasoning_efforts(&self, model_id: &str) -> Vec<ReasoningEffortOption> {
-        self.with_catalog_entry(model_id, |e| e.info().reasoning_efforts.clone())
-            .unwrap_or_default()
+        self.with_catalog_entry(model_id, |e| {
+            if crate::compat::is_vendor_catalog_model(e) {
+                if let Some(menu) = crate::compat::reasoning::lookup(&e.info.model) {
+                    return menu.options;
+                }
+            }
+            e.info().reasoning_efforts.clone()
+        })
+        .unwrap_or_default()
     }
 
     pub(crate) fn model_supports_backend_search(&self, model_id: &str) -> bool {
-        self.inner
-            .catalog
-            .read()
-            .models
-            .get(model_id)
-            .map(|e| e.info().supports_backend_search)
+        self.with_catalog_entry(model_id, |e| e.info().supports_backend_search)
             .unwrap_or(false)
     }
 
@@ -592,24 +614,16 @@ impl ModelsManager {
         &self,
         model_id: &str,
     ) -> Option<xai_grok_sampling_types::CompactionsRemaining> {
-        self.inner
-            .catalog
-            .read()
-            .models
-            .get(model_id)
-            .and_then(|e| e.info().compactions_remaining)
+        self.with_catalog_entry(model_id, |e| e.info().compactions_remaining)
+            .flatten()
     }
 
     pub(crate) fn model_compaction_at_tokens(
         &self,
         model_id: &str,
     ) -> Option<xai_grok_sampling_types::CompactionAtTokens> {
-        self.inner
-            .catalog
-            .read()
-            .models
-            .get(model_id)
-            .and_then(|e| e.info().compaction_at_tokens)
+        self.with_catalog_entry(model_id, |e| e.info().compaction_at_tokens)
+            .flatten()
     }
 
     /// Catalog opt-in to display the served-checkpoint fingerprint for this model.
@@ -625,9 +639,7 @@ impl ModelsManager {
 
     /// Whether `model_id` resolves in the current catalog — as a config key
     pub(crate) fn model_in_catalog(&self, model_id: &str) -> bool {
-        let cat = self.inner.catalog.read();
-        let models = &cat.models;
-        resolve_catalog_key(models, &acp::ModelId::new(model_id)).is_some()
+        self.with_catalog_entry(model_id, |_| ()).is_some()
     }
 
     #[cfg(test)]
@@ -1302,8 +1314,7 @@ impl ModelsManager {
         let current = self.inner.current_model_id.read().clone();
         let user_selected = self.inner.user_selected_model.load(Ordering::Relaxed);
         let needs_reselection = {
-            let cat = self.inner.catalog.read();
-            let models = &cat.models;
+            let models = self.merged_catalog_models();
             match models.get(current.0.as_ref()) {
                 None => true,
                 Some(entry) => {

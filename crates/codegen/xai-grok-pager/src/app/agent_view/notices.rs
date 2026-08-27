@@ -168,6 +168,7 @@ impl AgentView {
             // modal. A tip could at most peek beside the modal, so refuse.
             || self.extensions_modal.is_some()
             || self.agents_modal.is_some()
+            || self.vendor_login.is_some()
             // Goal-detail is a vertically-centered overlay painted after the
             // tip; its box only reaches the banner row for tall/content-rich
             // goals, but kept unconditional as a safe over-refusal (like the

@@ -249,6 +249,7 @@ pub(crate) fn stream_responses_tracked<'a>(
         let mut message_chunk_count: u64 = 0;
         let mut first_token_emitted = false;
         let mut reasoning_acc = String::new();
+        let mut text_acc = String::new();
         let mut last_content_chunk_at = Instant::now();
 
         // Maps Responses API `output_index` to our tool-only `tool_index`.
@@ -257,6 +258,7 @@ pub(crate) fn stream_responses_tracked<'a>(
         // look up `output_index` here to find the matching `tool_index`.
         let mut output_to_tool_index: BTreeMap<u32, u32> = BTreeMap::new();
         let mut next_tool_index: u32 = 0;
+        let mut streamed_tools: BTreeMap<u32, (String, String, String)> = BTreeMap::new();
 
         let mut stream = raw_stream;
         loop {
@@ -264,6 +266,12 @@ pub(crate) fn stream_responses_tracked<'a>(
                 Ok(Some(event_result)) => event_result,
                 Ok(None) => break,
                 Err(_elapsed) => {
+                    // GROK_COMPAT_HOOK: finish after visible output instead of idle-fail.
+                    if final_response.is_some()
+                        || crate::compat::has_streamed_visible_output(&text_acc, &streamed_tools)
+                    {
+                        break;
+                    }
                     let err = SamplingError::IdleTimeout {
                         elapsed_secs: idle_timeout.as_secs(),
                     };
@@ -278,6 +286,21 @@ pub(crate) fn stream_responses_tracked<'a>(
             let event = match event_result {
                 Ok(event) => event,
                 Err(err) => {
+                    // ChatGPT Codex (and some OpenAI gateways) close the SSE
+                    // body right after `response.completed` without a clean
+                    // `[DONE]`. eventsource reports that as a transport error.
+                    // If we already have a terminal snapshot or visible text,
+                    // finish the turn instead of retrying the same reply.
+                    // GROK_COMPAT_HOOK: Codex often closes SSE without [DONE].
+                    if final_response.is_some()
+                        || crate::compat::has_streamed_visible_output(&text_acc, &streamed_tools)
+                    {
+                        tracing::debug!(
+                            error = %err,
+                            "ignoring trailing Responses stream error after output"
+                        );
+                        break;
+                    }
                     yield SamplingEvent::Failed {
                         request_id: request_id.clone(),
                         error: SamplingErrorInfo::from(&err),
@@ -328,6 +351,7 @@ pub(crate) fn stream_responses_tracked<'a>(
                 ResponseStreamEvent::ResponseOutputTextDelta(text_delta_event) => {
                     let delta = text_delta_event.delta;
                     if !delta.is_empty() {
+                        text_acc.push_str(&delta);
                         if !first_token_emitted {
                             first_token_emitted = true;
                             yield SamplingEvent::FirstToken {
@@ -343,6 +367,12 @@ pub(crate) fn stream_responses_tracked<'a>(
                             text: delta,
                             chunk_index,
                         };
+                    }
+                }
+
+                ResponseStreamEvent::ResponseOutputTextDone(text_done_event) => {
+                    if text_acc.is_empty() && !text_done_event.text.is_empty() {
+                        text_acc = text_done_event.text;
                     }
                 }
 
@@ -392,6 +422,10 @@ pub(crate) fn stream_responses_tracked<'a>(
                         let tool_index = next_tool_index;
                         next_tool_index += 1;
                         output_to_tool_index.insert(added_event.output_index, tool_index);
+                        streamed_tools.insert(
+                            tool_index,
+                            (fc.call_id.clone(), fc.name.clone(), fc.arguments.clone()),
+                        );
 
                         yield SamplingEvent::ToolCallDelta {
                             request_id: request_id.clone(),
@@ -411,6 +445,9 @@ pub(crate) fn stream_responses_tracked<'a>(
                         && let Some(&tool_index) =
                             output_to_tool_index.get(&args_event.output_index)
                     {
+                        if let Some(tool) = streamed_tools.get_mut(&tool_index) {
+                            tool.2.push_str(&delta);
+                        }
                         yield SamplingEvent::ToolCallDelta {
                             request_id: request_id.clone(),
                             tool_index,
@@ -423,6 +460,7 @@ pub(crate) fn stream_responses_tracked<'a>(
 
                 ResponseStreamEvent::ResponseCompleted(completed_event) => {
                     final_response = Some(completed_event.response);
+                    should_break = true;
                 }
 
                 ResponseStreamEvent::ResponseIncomplete(incomplete_event) => {
@@ -598,6 +636,42 @@ pub(crate) fn stream_responses_tracked<'a>(
         // ── Build the final response ─────────────────────────────────
         let mut response = match final_response {
             Some(r) => r,
+            None if crate::compat::has_streamed_visible_output(&text_acc, &streamed_tools) => {
+                // GROK_COMPAT_HOOK: deltas arrived but the snapshot event did not.
+                let mut items = vec![ConversationItem::assistant(text_acc.clone())];
+                crate::compat::inject_streaming_tool_fallback(&mut items, &streamed_tools);
+                xai_grok_sampling_types::inject_streaming_reasoning_fallback(
+                    &mut items,
+                    reasoning_acc,
+                );
+                let stream_end = Instant::now();
+                let metrics = InferenceLatencyStats::from_timestamps(
+                    stream_start,
+                    &chunk_timestamps,
+                    stream_end,
+                );
+                let conversation_response = ConversationResponse {
+                    items,
+                    stop_reason: Some(StopReason::Stop),
+                    usage: None,
+                    cost_usd_ticks: None,
+                    message_chunks_emitted: message_chunk_count,
+                    doom_loop_signals: doom_loop
+                        .as_ref()
+                        .map(|collector| collector.take())
+                        .unwrap_or_default(),
+                    stop_message: None,
+                    message_id: None,
+                    raw_stop_reason: None,
+                    stop_sequence: None,
+                };
+                yield SamplingEvent::Completed {
+                    request_id: request_id.clone(),
+                    response: Box::new(conversation_response),
+                    metrics,
+                };
+                return;
+            }
             None => {
                 let err = SamplingError::Api {
                     status: reqwest::StatusCode::INTERNAL_SERVER_ERROR,
@@ -652,6 +726,10 @@ pub(crate) fn stream_responses_tracked<'a>(
         // `summary` (the streaming deltas may have arrived out of band).
         // Splice policy lives in `inject_streaming_reasoning_fallback`.
         let mut items = xai_grok_sampling_types::response_to_conversation_items(response);
+        // GROK_COMPAT_HOOK begin
+        crate::compat::inject_streaming_text_fallback(&mut items, &text_acc);
+        crate::compat::inject_streaming_tool_fallback(&mut items, &streamed_tools);
+        // GROK_COMPAT_HOOK end
         xai_grok_sampling_types::inject_streaming_reasoning_fallback(&mut items, reasoning_acc);
 
         let has_tool_calls = items.iter().any(|i| match i {
@@ -1447,6 +1525,81 @@ mod tests {
                 assert!(response.doom_loop_signals.is_empty());
             }
             other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn streamed_text_survives_empty_completed_snapshot() {
+        let events: Vec<Result<rs::ResponseStreamEvent, SamplingError>> = vec![
+            Ok(text_delta_event("Hi! How can I help?")),
+            Ok(completed_event()),
+        ];
+        let evs = collect(stream_responses(
+            stream::iter(events).boxed(),
+            None,
+            rid(),
+            Duration::from_secs(60),
+            None,
+        ))
+        .await;
+        match evs.last().unwrap() {
+            SamplingEvent::Completed { response, .. } => {
+                assert_eq!(response.assistant_text(), "Hi! How can I help?");
+            }
+            other => panic!("expected Completed with streamed text, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn trailing_stream_error_after_completed_does_not_fail_the_turn() {
+        let events: Vec<Result<rs::ResponseStreamEvent, SamplingError>> = vec![
+            Ok(text_delta_event("Hi!")),
+            Ok(completed_event()),
+            Err(SamplingError::EventStreamError("connection closed".into())),
+        ];
+        let evs = collect(stream_responses(
+            stream::iter(events).boxed(),
+            None,
+            rid(),
+            Duration::from_secs(60),
+            None,
+        ))
+        .await;
+        assert!(
+            evs.iter()
+                .any(|e| matches!(e, SamplingEvent::Completed { .. })),
+            "completed snapshot must win over a trailing transport error: {evs:?}"
+        );
+        assert!(
+            !evs.iter()
+                .any(|e| matches!(e, SamplingEvent::Failed { .. })),
+            "must not fail after a completed response: {evs:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn streamed_tool_calls_survive_empty_completed_snapshot() {
+        let events: Vec<Result<rs::ResponseStreamEvent, SamplingError>> = vec![
+            Ok(function_call_added_event(0, "call_1", "read_file")),
+            Ok(function_call_args_delta_event(0, "{\"path\":\"a.rs\"}")),
+            Ok(completed_event()),
+        ];
+        let evs = collect(stream_responses(
+            stream::iter(events).boxed(),
+            None,
+            rid(),
+            Duration::from_secs(60),
+            None,
+        ))
+        .await;
+        match evs.last().unwrap() {
+            SamplingEvent::Completed { response, .. } => {
+                let tools = response.tool_calls();
+                assert_eq!(tools.len(), 1, "{response:?}");
+                assert_eq!(tools[0].name, "read_file");
+                assert_eq!(tools[0].arguments.as_ref(), "{\"path\":\"a.rs\"}");
+            }
+            other => panic!("expected Completed with streamed tool call, got {other:?}"),
         }
     }
 }

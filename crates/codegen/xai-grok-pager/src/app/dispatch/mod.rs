@@ -35,6 +35,7 @@ mod status;
 mod task_result;
 mod transcript;
 mod turn;
+mod vendor;
 mod voice;
 
 pub(crate) use auth::scrollback_has_recent_disk_full;

@@ -20,6 +20,7 @@ pub mod actor;
 pub mod attribution;
 pub mod client;
 pub mod commands;
+pub(crate) mod compat;
 pub mod config;
 pub mod doom_loop;
 mod doom_loop_recovery;

@@ -18,6 +18,7 @@ pub use xai_grok_bundle as bundle;
 pub mod claude_import;
 pub mod claude_import_state;
 pub mod cli_models;
+pub mod compat;
 pub mod config;
 #[cfg(all(test, feature = "config-docs"))]
 pub mod config_docs;

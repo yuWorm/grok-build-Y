@@ -1175,6 +1175,50 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
             vec![]
         }
         Action::Login => dispatch_login(app),
+        Action::OpenVendorLogin { provider_id } => {
+            super::vendor::dispatch_open_vendor_login(app, provider_id)
+        }
+        Action::SubmitVendorKey { provider_id, key } => {
+            super::vendor::dispatch_submit_vendor_key(app, provider_id, key)
+        }
+        Action::CloseVendorLogin => super::vendor::dispatch_close_vendor_login(app),
+        Action::VendorLogout { provider_id } => {
+            super::vendor::dispatch_vendor_logout(app, provider_id)
+        }
+        Action::StartVendorOAuth { provider_id } => {
+            super::vendor::dispatch_start_vendor_oauth(app, provider_id)
+        }
+        Action::SubmitVendorOAuthCode { provider_id, code } => {
+            super::vendor::dispatch_submit_vendor_oauth_code(app, provider_id, code)
+        }
+        Action::SyncVendorCustom {
+            name: _,
+            base_url,
+            api_backend,
+            auth_scheme,
+            key,
+        } => {
+            super::vendor::dispatch_sync_vendor_custom(app, base_url, api_backend, auth_scheme, key)
+        }
+        Action::SaveVendorCustom {
+            provider_id,
+            name,
+            base_url,
+            api_backend,
+            auth_scheme,
+            key,
+            models,
+        } => super::vendor::dispatch_save_vendor_custom(
+            app,
+            provider_id,
+            name,
+            base_url,
+            api_backend,
+            auth_scheme,
+            key,
+            models,
+        ),
+        Action::SyncModelsDev => super::vendor::dispatch_sync_models_dev(app),
         Action::CancelLogin => dispatch_cancel_login(app),
         Action::SubmitAuthCode(code) => dispatch_submit_auth_code(app, code),
         Action::CopyAuthUrl => {

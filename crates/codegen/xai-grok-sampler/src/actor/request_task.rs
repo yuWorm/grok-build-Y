@@ -133,6 +133,9 @@ pub(crate) async fn run_request_task(
     let doom_max_retries = doom_policy.map_or(0, |p| p.max_retries);
     let mut doom_retry_count: u32 = 0;
     let output_observed = Arc::new(AtomicBool::new(false));
+    // GROK_COMPAT_HOOK: visible text / tool calls must not be resampled.
+    // Thinking-only remains retryable via `output_observed`.
+    let replay_unsafe = Arc::new(AtomicBool::new(false));
 
     loop {
         if cancel_token.is_cancelled() {
@@ -152,16 +155,20 @@ pub(crate) async fn run_request_task(
             &cancel_token,
             doom_check,
             Arc::clone(&output_observed),
+            Arc::clone(&replay_unsafe),
         )
         .instrument(sampling_span.clone())
         .await;
 
-        let effective_max_retries =
-            if retry_policy.retry_only_before_output && output_observed.load(Ordering::Relaxed) {
-                0
-            } else {
-                max_retries
-            };
+        let effective_max_retries = if (retry_policy.retry_only_before_output
+            && output_observed.load(Ordering::Relaxed))
+            || replay_unsafe.load(Ordering::Relaxed)
+        {
+            // GROK_COMPAT_HOOK: `replay_unsafe` zeros retries after visible output.
+            0
+        } else {
+            max_retries
+        };
 
         match outcome {
             AttemptOutcome::Completed {
@@ -536,7 +543,10 @@ async fn run_one_attempt(
     cancel_token: &CancellationToken,
     doom_check: Option<xai_grok_sampling_types::DoomLoopRecoveryPolicy>,
     output_observed: Arc<AtomicBool>,
+    replay_unsafe: Arc<AtomicBool>,
 ) -> AttemptOutcome {
+    // GROK_COMPAT_HOOK: third-party models still use these three backends.
+    // Lenient Responses JSON is applied in `deserialize_response_event`.
     match client.api_backend() {
         ApiBackend::ChatCompletions => {
             let (raw, metadata) = match client.conversation_stream(request).await {
@@ -554,6 +564,7 @@ async fn run_one_attempt(
                 None,
                 FailedResponseCapture::default(),
                 output_observed,
+                replay_unsafe,
             )
             .await
         }
@@ -594,6 +605,7 @@ async fn run_one_attempt(
                 doom_check,
                 failed_response,
                 output_observed,
+                replay_unsafe,
             )
             .await
         }
@@ -613,6 +625,7 @@ async fn run_one_attempt(
                 None,
                 FailedResponseCapture::default(),
                 output_observed,
+                replay_unsafe,
             )
             .await
         }
@@ -664,6 +677,7 @@ async fn drive_l2(
     doom_check: Option<xai_grok_sampling_types::DoomLoopRecoveryPolicy>,
     failed_response: FailedResponseCapture,
     output_observed: Arc<AtomicBool>,
+    replay_unsafe: Arc<AtomicBool>,
 ) -> AttemptOutcome {
     let mut l2 = pin!(l2);
     loop {
@@ -701,6 +715,10 @@ async fn drive_l2(
                     let content_filtered = response.stop_reason
                         == Some(xai_grok_sampling_types::StopReason::ContentFilter);
                     if !content_filtered && let Some(reason) = response.empty_reason() {
+                        // GROK_COMPAT_HOOK: streamed text missing from the snapshot.
+                        if crate::compat::accept_empty_snapshot(&response) {
+                            return AttemptOutcome::Completed { response, metrics };
+                        }
                         let context = build_empty_context(reason, &response);
                         return AttemptOutcome::Empty { context };
                     }
@@ -732,6 +750,9 @@ async fn drive_l2(
                             | SamplingEvent::BackendToolCallCompleted { .. }
                     ) {
                         output_observed.store(true, Ordering::Relaxed);
+                    }
+                    if crate::compat::marks_replay_unsafe(&other) {
+                        replay_unsafe.store(true, Ordering::Relaxed);
                     }
                     let _ = event_tx.send(retag(other, &request_id));
                 }

@@ -284,6 +284,7 @@ impl AgentView {
             inline_media_hits: InlineMediaHitAreas::default(),
             extensions_modal: None,
             agents_modal: None,
+            vendor_login: None,
             persona_detail: None,
             btw_state: None,
             minimal_btw_lifecycle: None,

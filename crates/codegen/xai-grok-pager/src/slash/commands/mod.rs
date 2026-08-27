@@ -46,6 +46,8 @@ pub mod personas;
 pub mod plan;
 pub mod plugin;
 pub mod privacy;
+pub mod provider_login;
+pub mod provider_logout;
 pub mod queue;
 pub mod recap;
 pub mod release_notes;
@@ -58,6 +60,7 @@ pub mod scroll_debug;
 pub mod session_info;
 pub mod settings_cmd;
 pub mod share;
+pub mod sync_models_dev;
 pub mod tasks;
 pub mod theme;
 pub mod timeline;
@@ -151,6 +154,9 @@ pub fn builtin_commands() -> Vec<Arc<dyn SlashCommand>> {
         Arc::new(import_claude::ImportClaudeCommand),
         Arc::new(login::LoginCommand),
         Arc::new(logout::LogoutCommand),
+        Arc::new(provider_login::ProviderLoginCommand),
+        Arc::new(provider_logout::ProviderLogoutCommand),
+        Arc::new(sync_models_dev::SyncModelsDevCommand),
         Arc::new(home::HomeCommand),
         Arc::new(delete::DeleteCommand),
         Arc::new(help::HelpCommand),

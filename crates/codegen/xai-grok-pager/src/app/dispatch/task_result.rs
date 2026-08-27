@@ -1505,5 +1505,32 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
             app.show_toast(&format!("\u{2717} Could not save {key}: {scrubbed}"));
             vec![]
         }
+        TaskResult::VendorLoginComplete { provider_id, error } => {
+            super::vendor::handle_vendor_login_complete(app, provider_id, error)
+        }
+        TaskResult::VendorOAuthPending {
+            provider_id,
+            authorize_url,
+            instructions,
+        } => super::vendor::handle_vendor_oauth_pending(
+            app,
+            provider_id,
+            authorize_url,
+            instructions,
+        ),
+        TaskResult::VendorCustomSynced { models, error } => {
+            super::vendor::handle_vendor_custom_synced(app, models, error)
+        }
+        TaskResult::VendorCustomSaved { provider_id, error } => {
+            super::vendor::handle_vendor_login_complete(app, provider_id, error)
+        }
+        TaskResult::VendorLogoutComplete {
+            provider_id,
+            removed,
+            error,
+        } => super::vendor::handle_vendor_logout_complete(app, provider_id, removed, error),
+        TaskResult::ModelsDevSynced { count, error } => {
+            super::vendor::handle_models_dev_synced(app, count, error)
+        }
     }
 }

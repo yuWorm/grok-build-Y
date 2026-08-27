@@ -959,6 +959,7 @@ impl AgentView {
                 || self.block_viewer.is_some()
                 || self.extensions_modal.is_some()
                 || self.agents_modal.is_some()
+                || self.vendor_login.is_some()
                 || self.btw_state.is_some()
                 || self.line_viewer.is_some()
                 || self.active_modal.is_some())
@@ -4088,6 +4089,23 @@ impl AgentView {
             ShortcutsBar::new(&hints).render(layout.shortcuts, buf);
             self.pane_areas = layout.pane_areas();
             return (prompt_cursor_pos, prompt_post_flush);
+        }
+        if let Some(ref mut modal_state) = self.vendor_login {
+            let overlay_area = Rect {
+                x: area.x,
+                y: area.y,
+                width: area.width,
+                height: layout.shortcuts.y.saturating_sub(area.y).saturating_sub(1),
+            };
+            let compact = self.scrollback.appearance().prompt.compact;
+            crate::views::vendor_login_modal::render_vendor_login_modal(
+                buf,
+                overlay_area,
+                modal_state,
+                compact,
+            );
+            self.pane_areas = layout.pane_areas();
+            return (None, crate::terminal::overlay::clear().map(Into::into));
         }
         if let Some(ref mut modal_state) = self.agents_modal {
             let overlay_area = Rect {

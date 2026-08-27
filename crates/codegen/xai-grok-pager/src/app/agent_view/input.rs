@@ -36,6 +36,7 @@ impl AgentView {
             || self.active_modal.is_some()
             || self.extensions_modal.is_some()
             || self.agents_modal.is_some()
+            || self.vendor_login.is_some()
             || self.persona_detail.is_some()
             || self.scrollback_search.is_some()
             || self.line_viewer.is_some()
@@ -78,6 +79,7 @@ impl AgentView {
             && self.gboom.is_none()
             && self.extensions_modal.is_none()
             && self.agents_modal.is_none()
+            && self.vendor_login.is_none()
             && self.persona_detail.is_none()
             && self.btw_state.is_none()
             && self.scrollback_search.is_none()
@@ -113,6 +115,7 @@ impl AgentView {
             || self.video_viewer.is_some()
             || self.image_viewer.is_some()
             || self.agents_modal.is_some()
+            || self.vendor_login.is_some()
             || self.persona_detail.is_some()
             || self.block_viewer.is_some()
     }
@@ -768,6 +771,19 @@ impl AgentView {
                 }
                 Event::Mouse(mouse) => self.handle_persona_detail_mouse(mouse),
                 Event::Paste(text) => self.handle_persona_detail_paste(text),
+                _ => InputOutcome::Changed,
+            };
+        }
+        if self.vendor_login.is_some() {
+            return match ev {
+                Event::Key(key) if key.kind != KeyEventKind::Release => {
+                    if registry.lookup(key, When::Always).is_some() {
+                        return InputOutcome::Unchanged;
+                    }
+                    self.handle_vendor_login_key(key)
+                }
+                Event::Mouse(mouse) => self.handle_vendor_login_mouse(mouse),
+                Event::Paste(text) => self.handle_vendor_login_paste(text),
                 _ => InputOutcome::Changed,
             };
         }

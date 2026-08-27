@@ -54,5 +54,6 @@ pub mod todo_pane;
 pub mod turn_status;
 pub mod tutorial;
 pub mod usage_modal;
+pub mod vendor_login_modal;
 pub mod welcome;
 pub mod workflows;

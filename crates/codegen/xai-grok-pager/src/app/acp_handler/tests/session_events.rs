@@ -459,6 +459,11 @@
             Some("auth_transient"),
             "Unauthorized (401)\n\nAuthentication is temporarily unavailable"
         ));
+        // Vendor (Codex) 401s carry `/provider-login`, not `/login`.
+        assert!(!is_reauthable_failure(
+            Some("vendor_auth"),
+            "Unauthorized (401)\n\nRun /provider-login openai-codex"
+        ));
         // Unrelated failures must not be treated as re-authable.
         assert!(!is_reauthable_failure(
             Some("api"),
@@ -490,6 +495,37 @@
             "auth 401 must surface the actionable re-auth prompt"
         );
         assert!(!session.credit_limit_blocked);
+    }
+
+    #[test]
+    fn apply_retry_state_vendor_auth_does_not_push_xai_login_prompt() {
+        let mut session = make_session(Some("s1"));
+        let mut scrollback = ScrollbackState::new();
+        apply_retry_state(
+            &RetryState::Failed {
+                error_type: "vendor_auth".into(),
+                message: "Authentication required: OpenAI Codex (ChatGPT) rejected this session. \
+                          Run /provider-login openai-codex, then resend your message."
+                    .into(),
+            },
+            &mut session,
+            &mut scrollback,
+            false,
+        );
+        assert!(
+            !matches!(
+                last_session_event(&scrollback),
+                Some(SessionEvent::ReAuthRequired)
+            ),
+            "Codex 401 must not tell the user to /login"
+        );
+        assert!(
+            matches!(
+                last_session_event(&scrollback),
+                Some(SessionEvent::RequestFailed { .. }) | Some(SessionEvent::RetryFailed { .. })
+            ),
+            "vendor_auth should keep the /provider-login copy"
+        );
     }
 
     /// A recoverable auth failure preserves `in_flight_prompt` so the

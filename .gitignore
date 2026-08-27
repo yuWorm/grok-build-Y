@@ -1,3 +1,6 @@
 /target
 **/*.rs.bk
 .DS_Store
+
+# Reference checkouts (Pi providers / AI protocols). Not part of grok-build.
+/sources/

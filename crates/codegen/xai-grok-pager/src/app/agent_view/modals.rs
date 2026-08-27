@@ -9,7 +9,94 @@ use crate::app::app_view::InputOutcome;
 use crate::views::file_search::line_viewer::LineViewerState;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
+fn map_vendor_login_outcome(
+    outcome: crate::views::vendor_login_modal::VendorLoginOutcome,
+) -> InputOutcome {
+    use crate::views::vendor_login_modal::VendorLoginOutcome;
+    match outcome {
+        VendorLoginOutcome::Unchanged => InputOutcome::Unchanged,
+        VendorLoginOutcome::Changed => InputOutcome::Changed,
+        VendorLoginOutcome::Close => InputOutcome::Action(Action::CloseVendorLogin),
+        VendorLoginOutcome::Submit { provider_id, key } => {
+            InputOutcome::Action(Action::SubmitVendorKey { provider_id, key })
+        }
+        VendorLoginOutcome::StartOAuth { provider_id } => {
+            InputOutcome::Action(Action::StartVendorOAuth { provider_id })
+        }
+        VendorLoginOutcome::SubmitOAuthCode { provider_id, code } => {
+            InputOutcome::Action(Action::SubmitVendorOAuthCode { provider_id, code })
+        }
+        VendorLoginOutcome::SyncCustom {
+            name,
+            base_url,
+            api_backend,
+            auth_scheme,
+            key,
+        } => InputOutcome::Action(Action::SyncVendorCustom {
+            name,
+            base_url,
+            api_backend,
+            auth_scheme,
+            key,
+        }),
+        VendorLoginOutcome::SaveCustom {
+            provider_id,
+            name,
+            base_url,
+            api_backend,
+            auth_scheme,
+            key,
+            models,
+        } => InputOutcome::Action(Action::SaveVendorCustom {
+            provider_id,
+            name,
+            base_url,
+            api_backend,
+            auth_scheme,
+            key,
+            models,
+        }),
+    }
+}
+
 impl AgentView {
+    pub(super) fn handle_vendor_login_key(
+        &mut self,
+        key: &crossterm::event::KeyEvent,
+    ) -> InputOutcome {
+        let Some(ref mut state) = self.vendor_login else {
+            return InputOutcome::Unchanged;
+        };
+        map_vendor_login_outcome(crate::views::vendor_login_modal::handle_vendor_login_key(
+            state, key,
+        ))
+    }
+
+    pub(super) fn handle_vendor_login_paste(&mut self, text: &str) -> InputOutcome {
+        let Some(ref mut state) = self.vendor_login else {
+            return InputOutcome::Unchanged;
+        };
+        match crate::views::vendor_login_modal::handle_vendor_login_paste(state, text) {
+            crate::views::vendor_login_modal::VendorLoginOutcome::Changed => InputOutcome::Changed,
+            _ => InputOutcome::Unchanged,
+        }
+    }
+
+    pub(super) fn handle_vendor_login_mouse(
+        &mut self,
+        mouse: &crossterm::event::MouseEvent,
+    ) -> InputOutcome {
+        let Some(ref mut state) = self.vendor_login else {
+            return InputOutcome::Unchanged;
+        };
+        map_vendor_login_outcome(crate::views::vendor_login_modal::handle_vendor_login_mouse(
+            state,
+            mouse.kind,
+            mouse.column,
+            mouse.row,
+        ))
+    }
+
     // -- Agents modal input handling --
 
     pub(super) fn handle_agents_modal_key(

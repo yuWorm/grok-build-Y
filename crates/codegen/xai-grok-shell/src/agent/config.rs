@@ -3565,6 +3565,10 @@ pub(crate) fn resolve_model_list(
         }
         resolved = prefetched;
     }
+    // GROK_COMPAT_HOOK begin
+    // Vendor rows are overlaid on read in ModelsManager, not baked into the
+    // stored catalog. Baking here would leave stale rows after logout.
+    // GROK_COMPAT_HOOK end
     for (key, model_override) in &cfg.config_models {
         let had_base = resolved.contains_key(key);
         let base = resolved.shift_remove(key);
@@ -4431,11 +4435,14 @@ impl ModelEntry {
         self.auth_provider.as_ref()
     }
     /// `true` when the model has a non-empty `api_key`, an `env_key` that
-    /// resolves to a non-empty value, or a named auth provider.
+    /// resolves to a non-empty value, a named auth provider, or is a vendor
+    /// catalog model (credentials live in `vendor-auth.json`, not `auth.json`).
     /// Probes `std::env::var` at call time: result is not stable across env
     /// changes. Never executes a provider command.
     pub(crate) fn has_own_credentials(&self) -> bool {
-        self.own_credential().is_some() || self.auth_provider.is_some()
+        self.own_credential().is_some()
+            || self.auth_provider.is_some()
+            || crate::compat::is_vendor_catalog_model(self)
     }
 }
 impl std::ops::Deref for ModelEntry {
@@ -4859,6 +4866,20 @@ pub(crate) fn resolve_credentials(
             info.base_url.clone(),
             xai_chat_state::AuthType::ApiKey,
         )
+    // GROK_COMPAT_HOOK begin
+    } else if let Some(key) = crate::compat::vendor_key_for_model(model) {
+        (
+            Some(key),
+            info.base_url.clone(),
+            xai_chat_state::AuthType::ApiKey,
+        )
+    } else if crate::compat::is_vendor_catalog_model(model) {
+        (
+            None,
+            info.base_url.clone(),
+            xai_chat_state::AuthType::ApiKey,
+        )
+    // GROK_COMPAT_HOOK end
     } else if let Some(key) = session_key {
         (
             Some(key.to_owned()),
@@ -5234,6 +5255,11 @@ pub(crate) fn sampling_config_for_model(
         alpha_test_key.as_deref(),
         &credentials.base_url,
     );
+    // GROK_COMPAT_HOOK begin
+    if let Some(family) = info.model_family.as_deref() {
+        crate::compat::oauth::inject_request_headers(family, &mut extra_headers);
+    }
+    // GROK_COMPAT_HOOK end
     let api_backend = info.api_backend.clone();
     let extra_response_includes = response_include_extensions(
         info.supports_backend_search,

@@ -104,6 +104,157 @@ pub(crate) fn execute(
                     }
                 });
         }
+        Effect::VendorProbe { provider_id, key } => {
+            tasks.spawn(async move {
+                match xai_grok_shell::compat::login_with_api_key(&provider_id, &key).await {
+                    Ok(()) => TaskResult::VendorLoginComplete {
+                        provider_id,
+                        error: None,
+                    },
+                    Err(error) => TaskResult::VendorLoginComplete {
+                        provider_id,
+                        error: Some(error.to_string()),
+                    },
+                }
+            });
+        }
+        Effect::VendorLogoutPersist { provider_id } => {
+            tasks.spawn(async move {
+                match xai_grok_shell::compat::logout_provider(&provider_id) {
+                    Ok(removed) => TaskResult::VendorLogoutComplete {
+                        provider_id,
+                        removed,
+                        error: None,
+                    },
+                    Err(error) => TaskResult::VendorLogoutComplete {
+                        provider_id,
+                        removed: false,
+                        error: Some(error.to_string()),
+                    },
+                }
+            });
+        }
+        Effect::VendorOAuthStart { provider_id } => {
+            tasks.spawn(async move {
+                match xai_grok_shell::compat::oauth::begin(&provider_id).await {
+                    Ok(pending) => TaskResult::VendorOAuthPending {
+                        provider_id: pending.provider_id,
+                        authorize_url: pending.authorize_url,
+                        instructions: pending.instructions,
+                    },
+                    Err(error) => TaskResult::VendorLoginComplete {
+                        provider_id,
+                        error: Some(error.to_string()),
+                    },
+                }
+            });
+        }
+        Effect::VendorOAuthWait { provider_id } => {
+            tasks.spawn(async move {
+                match xai_grok_shell::compat::oauth::wait_completion(&provider_id).await {
+                    Ok(()) => TaskResult::VendorLoginComplete {
+                        provider_id,
+                        error: None,
+                    },
+                    Err(error) => TaskResult::VendorLoginComplete {
+                        provider_id,
+                        error: Some(error.to_string()),
+                    },
+                }
+            });
+        }
+        Effect::VendorCustomSync {
+            base_url,
+            api_backend,
+            auth_scheme,
+            key,
+        } => {
+            tasks.spawn(async move {
+                let scheme = xai_grok_shell::compat::custom::parse_auth_scheme(&auth_scheme);
+                let version = (api_backend == "messages").then_some("2023-06-01");
+                match xai_grok_shell::compat::custom::fetch_model_list(
+                    &base_url,
+                    &key,
+                    scheme,
+                    version,
+                )
+                .await
+                {
+                    Ok(models) => TaskResult::VendorCustomSynced {
+                        models: models
+                            .into_iter()
+                            .map(|m| (m.api_model, m.name, m.context_window))
+                            .collect(),
+                        error: None,
+                    },
+                    Err(error) => TaskResult::VendorCustomSynced {
+                        models: vec![],
+                        error: Some(error.to_string()),
+                    },
+                }
+            });
+        }
+        Effect::VendorCustomSave {
+            provider_id,
+            name,
+            base_url,
+            api_backend,
+            auth_scheme,
+            key,
+            models,
+        } => {
+            tasks.spawn(async move {
+                let id = provider_id
+                    .filter(|s| !s.trim().is_empty())
+                    .unwrap_or_else(|| xai_grok_shell::compat::custom::unique_id(&name));
+                let anthropic_version = (api_backend == "messages")
+                    .then(|| "2023-06-01".to_owned());
+                let spec = xai_grok_shell::compat::custom::CustomProvider {
+                    id: id.clone(),
+                    name,
+                    base_url,
+                    api_backend,
+                    auth_scheme,
+                    anthropic_version,
+                    models: models
+                        .into_iter()
+                        .map(|(api_model, name, context_window, enabled)| {
+                            xai_grok_shell::compat::custom::CustomModel {
+                                api_model: api_model.clone(),
+                                name,
+                                context_window,
+                                supports_reasoning_effort: xai_grok_shell::compat::reasoning::model_supports(&api_model),
+                                enabled,
+                            }
+                        })
+                        .collect(),
+                };
+                match xai_grok_shell::compat::custom::save_custom_provider(spec, &key) {
+                    Ok(()) => TaskResult::VendorCustomSaved {
+                        provider_id: id,
+                        error: None,
+                    },
+                    Err(error) => TaskResult::VendorCustomSaved {
+                        provider_id: id,
+                        error: Some(error.to_string()),
+                    },
+                }
+            });
+        }
+        Effect::SyncModelsDev => {
+            tasks.spawn(async move {
+                match xai_grok_shell::compat::reasoning::sync_from_models_dev().await {
+                    Ok(result) => TaskResult::ModelsDevSynced {
+                        count: result.count,
+                        error: None,
+                    },
+                    Err(error) => TaskResult::ModelsDevSynced {
+                        count: 0,
+                        error: Some(error.to_string()),
+                    },
+                }
+            });
+        }
         Effect::Logout => {
             let tx = acp_tx.clone();
             tasks

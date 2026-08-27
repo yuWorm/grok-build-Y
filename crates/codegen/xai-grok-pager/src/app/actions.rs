@@ -669,6 +669,51 @@ pub enum Action {
     SwitchAccount,
     /// User pressed login on the welcome screen.
     Login,
+    /// Open the third-party provider overlay (does not use `/login`).
+    /// `provider_id` is `None` to start on the provider picker.
+    OpenVendorLogin {
+        provider_id: Option<String>,
+    },
+    /// Submit a pasted vendor API key for probe + persist.
+    SubmitVendorKey {
+        provider_id: String,
+        key: String,
+    },
+    /// Dismiss the vendor login overlay.
+    CloseVendorLogin,
+    /// Drop a stored vendor API key.
+    VendorLogout {
+        provider_id: String,
+    },
+    /// Start a vendor OAuth flow (OpenRouter PKCE, …).
+    StartVendorOAuth {
+        provider_id: String,
+    },
+    /// Paste a redirect URL / authorization code into an in-flight OAuth login.
+    SubmitVendorOAuthCode {
+        provider_id: String,
+        code: String,
+    },
+    /// GET `{base}/models` for a custom provider form.
+    SyncVendorCustom {
+        name: String,
+        base_url: String,
+        api_backend: String,
+        auth_scheme: String,
+        key: String,
+    },
+    /// Persist a custom provider to `vendor-providers.json` (no `config.toml`).
+    SaveVendorCustom {
+        provider_id: Option<String>,
+        name: String,
+        base_url: String,
+        api_backend: String,
+        auth_scheme: String,
+        key: String,
+        models: Vec<(String, String, u64, bool)>,
+    },
+    /// Fetch models.dev (reasoning + context/output limits) into `~/.grok`.
+    SyncModelsDev,
     /// Cancel an in-progress login that was started from inside a session
     /// (`/login` or a 401 re-auth prompt) and return to the previous view.
     /// Distinct from `Quit`: abandoning a mid-session re-auth must not exit
@@ -1803,6 +1848,31 @@ pub enum Effect {
         agent_id: AgentId,
         session_id: acp::SessionId,
     },
+    /// Probe and persist a third-party provider API key.
+    VendorProbe { provider_id: String, key: String },
+    /// Remove a third-party provider API key from `vendor-auth.json`.
+    VendorLogoutPersist { provider_id: String },
+    /// Bind loopback + build the authorize URL for a vendor OAuth login.
+    VendorOAuthStart { provider_id: String },
+    /// Wait for callback or pasted code, then persist the credential.
+    VendorOAuthWait { provider_id: String },
+    VendorCustomSync {
+        base_url: String,
+        api_backend: String,
+        auth_scheme: String,
+        key: String,
+    },
+    VendorCustomSave {
+        provider_id: Option<String>,
+        name: String,
+        base_url: String,
+        api_backend: String,
+        auth_scheme: String,
+        key: String,
+        models: Vec<(String, String, u64, bool)>,
+    },
+    /// GET https://models.dev/api.json and persist the compact overlay.
+    SyncModelsDev,
     /// Send AuthenticateRequest to the agent.
     Authenticate {
         request_seq: u64,
@@ -2331,6 +2401,36 @@ impl TaskResult {
 #[derive(Debug)]
 #[allow(clippy::large_enum_variant)]
 pub enum TaskResult {
+    /// Third-party provider API-key login finished.
+    VendorLoginComplete {
+        provider_id: String,
+        error: Option<String>,
+    },
+    /// Vendor OAuth is waiting on the browser / pasted code.
+    VendorOAuthPending {
+        provider_id: String,
+        authorize_url: String,
+        instructions: String,
+    },
+    VendorCustomSynced {
+        models: Vec<(String, String, u64)>,
+        error: Option<String>,
+    },
+    VendorCustomSaved {
+        provider_id: String,
+        error: Option<String>,
+    },
+    /// Third-party provider logout finished.
+    VendorLogoutComplete {
+        provider_id: String,
+        removed: bool,
+        error: Option<String>,
+    },
+    /// `/sync-models-dev` finished.
+    ModelsDevSynced {
+        count: usize,
+        error: Option<String>,
+    },
     /// A `command` status line finished.
     StatusLineCommandFinished {
         id: crate::app::status_line::RunId,
