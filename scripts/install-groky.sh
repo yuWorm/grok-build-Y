@@ -30,16 +30,18 @@ if ! command -v curl >/dev/null 2>&1; then
   exit 1
 fi
 
-auth_headers=()
+# Optional. Empty array + `set -u` is "unbound variable" on bash 4.4+
+# (`curl | bash` on Linux). Token is not required for public releases.
+AUTH_HEADER=()
 if [[ -n "${GROKY_GITHUB_TOKEN:-${GITHUB_TOKEN:-}}" ]]; then
-  auth_headers=(-H "Authorization: Bearer ${GROKY_GITHUB_TOKEN:-$GITHUB_TOKEN}")
+  AUTH_HEADER=(-H "Authorization: Bearer ${GROKY_GITHUB_TOKEN:-$GITHUB_TOKEN}")
 fi
 
 api() {
   curl -fsSL \
     -H "Accept: application/vnd.github+json" \
     -H "X-GitHub-Api-Version: 2022-11-28" \
-    "${auth_headers[@]}" \
+    ${AUTH_HEADER[@]+"${AUTH_HEADER[@]}"} \
     "$@"
 }
 
