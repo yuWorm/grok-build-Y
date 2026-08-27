@@ -58,14 +58,17 @@ struct GrokRequestHeaders<'a> {
 }
 
 impl GrokRequestHeaders<'_> {
-    /// GROK_COMPAT_HOOK: Codex drops `x-grok-*` and sends session-affinity headers.
+    /// GROK_COMPAT_HOOK: Codex / Claude OAuth drop `x-grok-*`.
     fn apply_for(
         &self,
         base_url: &str,
+        claude_oauth: bool,
         builder: reqwest::RequestBuilder,
     ) -> reqwest::RequestBuilder {
         if crate::compat::is_codex_responses_url(base_url) {
             crate::compat::apply_codex_session_headers(builder, self.session_id)
+        } else if claude_oauth {
+            crate::compat::apply_claude_oauth_request_headers(builder, self.session_id)
         } else {
             self.apply(builder)
         }
@@ -421,6 +424,8 @@ struct ClientDefaults {
     stream_tool_calls: bool,
     extra_response_includes: Vec<String>,
     doom_loop_recovery: Option<xai_grok_sampling_types::DoomLoopRecoveryPolicy>,
+    /// Claude Pro/Max OAuth fingerprint (Bearer `sk-ant-oat` / oauth beta).
+    claude_oauth: bool,
 }
 
 /// Endpoint URL builder, resolved once at client construction so each request
@@ -696,6 +701,12 @@ impl SamplingClient {
                 headers.insert(USER_AGENT, v);
             }
         }
+        // GROK_COMPAT_HOOK: Claude OAuth fingerprint UA is claude-cli.
+        if let Some(ua) = crate::compat::claude_oauth_user_agent(&config.extra_headers)
+            && let Ok(v) = HeaderValue::from_str(ua)
+        {
+            headers.insert(USER_AGENT, v);
+        }
 
         let http = if config.force_http1 {
             tracing::info!("Using HTTP/1.1 for sampling client (force_http1=true)");
@@ -720,6 +731,8 @@ impl SamplingClient {
             has_x_api_key_header = headers.get(HeaderName::from_static("x-api-key")).is_some(),
         );
 
+        let claude_oauth =
+            crate::compat::is_claude_oauth_client(config.api_key.as_deref(), &config.extra_headers);
         let defaults = ClientDefaults {
             model: config.model,
             max_completion_tokens: config.max_completion_tokens,
@@ -730,6 +743,7 @@ impl SamplingClient {
             stream_tool_calls: config.stream_tool_calls,
             extra_response_includes: config.extra_response_includes,
             doom_loop_recovery: config.doom_loop_recovery,
+            claude_oauth,
         };
 
         let endpoint = EndpointTemplate::new(&config.base_url, &config.query_params);
@@ -803,6 +817,17 @@ impl SamplingClient {
             );
         }
         let sent_bearer = Self::sent_fragment_from_headers(&headers, &self.defaults.auth_scheme);
+        // GROK_COMPAT_HOOK: Claude OAuth fingerprint has no `x-grok-*`.
+        if self.defaults.claude_oauth {
+            let grok_keys: Vec<_> = headers
+                .keys()
+                .filter(|name| name.as_str().starts_with("x-grok-"))
+                .cloned()
+                .collect();
+            for key in grok_keys {
+                headers.remove(&key);
+            }
+        }
         if let Some(injector) = &self.header_injector {
             injector.inject(&mut headers);
         }
@@ -1304,7 +1329,7 @@ impl SamplingClient {
             sent_bearer,
         } = self.post(self.endpoint("responses"));
         let http_request = grok_headers
-            .apply_for(&self.base_url, builder)
+            .apply_for(&self.base_url, self.defaults.claude_oauth, builder)
             .json(&request_body);
 
         let response = http_request.send().await.map_err(|e| {
@@ -1451,7 +1476,7 @@ impl SamplingClient {
             sent_bearer,
         } = self.post(self.endpoint("responses"));
         let mut http_request = grok_headers
-            .apply_for(&self.base_url, builder)
+            .apply_for(&self.base_url, self.defaults.claude_oauth, builder)
             .header(ACCEPT, HeaderValue::from_static("text/event-stream"));
         // GROK_COMPAT_HOOK: Codex 400s unknown `x-grok-*` headers.
         if crate::compat::allows_xai_request_extensions(&self.base_url)
@@ -1639,6 +1664,11 @@ impl SamplingClient {
             request.inner.top_p = self.defaults.top_p;
         }
 
+        // GROK_COMPAT_HOOK: Claude OAuth system[0] + `_` tool prefix.
+        if self.defaults.claude_oauth {
+            crate::compat::prepare_claude_oauth_messages(&mut request.inner);
+        }
+
         Ok(())
     }
 
@@ -1673,7 +1703,9 @@ impl SamplingClient {
             builder,
             sent_bearer,
         } = self.post(self.endpoint("messages"));
-        let http_request = grok_headers.apply(builder).json(&request.inner);
+        let http_request = grok_headers
+            .apply_for(&self.base_url, self.defaults.claude_oauth, builder)
+            .json(&request.inner);
 
         let response = http_request.send().await.map_err(|e| {
             tracing::debug!("HTTP request failed: {}", e);
@@ -1718,8 +1750,8 @@ impl SamplingClient {
             });
         }
 
-        let response_obj =
-            serde_json::from_slice::<messages::MessagesResponse>(&bytes).map_err(|e| {
+        let mut response_obj = serde_json::from_slice::<messages::MessagesResponse>(&bytes)
+            .map_err(|e| {
                 let raw_body = String::from_utf8_lossy(&bytes);
                 tracing::error!(
                     error = %e,
@@ -1728,6 +1760,9 @@ impl SamplingClient {
                 );
                 SamplingError::Serialization(e)
             })?;
+        if self.defaults.claude_oauth {
+            crate::compat::strip_claude_oauth_response_tools(&mut response_obj);
+        }
         Ok(response_obj)
     }
 
@@ -1788,7 +1823,7 @@ impl SamplingClient {
             sent_bearer,
         } = self.post(self.endpoint("messages"));
         let http_request = grok_headers
-            .apply(builder)
+            .apply_for(&self.base_url, self.defaults.claude_oauth, builder)
             .header(ACCEPT, HeaderValue::from_static("text/event-stream"))
             .json(&request.inner);
 
@@ -1917,6 +1952,17 @@ impl SamplingClient {
                     }
                 };
                 std::future::ready(item)
+            })
+            .map({
+                let claude_oauth = self.defaults.claude_oauth;
+                move |item| {
+                    item.map(|mut event| {
+                        if claude_oauth {
+                            crate::compat::strip_claude_oauth_stream_event(&mut event);
+                        }
+                        event
+                    })
+                }
             })
             .boxed();
 
@@ -2665,6 +2711,35 @@ mod tests {
     fn sampling_client_always_has_user_agent() {
         let client = SamplingClient::new(minimal_config()).expect("build");
         assert!(client.default_headers.contains_key(USER_AGENT));
+    }
+
+    #[test]
+    fn claude_oauth_keeps_cowork_user_agent() {
+        let mut cfg = minimal_config();
+        cfg.api_key = Some("sk-ant-oat-test".into());
+        cfg.extra_headers.insert(
+            "User-Agent".into(),
+            "claude-cli/2.1.220 (external, claude-desktop)".into(),
+        );
+        cfg.extra_headers.insert(
+            "anthropic-beta".into(),
+            "oauth-2025-04-20,claude-code-20250219".into(),
+        );
+        let client = SamplingClient::new(cfg).expect("build");
+        assert_eq!(
+            client.default_headers.get(USER_AGENT).unwrap(),
+            "claude-cli/2.1.220 (external, claude-desktop)"
+        );
+        assert!(client.defaults.claude_oauth);
+        let SentRequest { builder, .. } = client.post("http://localhost/test");
+        let req = builder.build().expect("build request");
+        assert!(
+            req.headers()
+                .keys()
+                .all(|name| !name.as_str().starts_with("x-grok-")),
+            "Claude OAuth must not send x-grok-* headers: {:?}",
+            req.headers()
+        );
     }
 
     // Regression: a past change dropped HeaderInjector (traceparent) from sampling requests.

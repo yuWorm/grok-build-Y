@@ -1,7 +1,8 @@
 //! Claude Pro/Max OAuth — port of Oh My Pi `registry/oauth/anthropic.ts`.
 //!
 //! Browser PKCE against claude.ai. Tokens go to `vendor-auth.json`.
-//! Inference uses Bearer + `anthropic-beta: oauth-2025-04-20`, never `x-api-key`.
+//! Inference uses Bearer + Cowork betas (never `x-api-key`). Request body
+//! identity / `_` tool prefix live in `xai-grok-sampler` `compat.rs`.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -31,6 +32,9 @@ const BIND_ADDR: &str = "127.0.0.1:54545";
 const SCOPE: &str = "org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload";
 const OAUTH_BETA: &str = "oauth-2025-04-20";
 const CLAUDE_CLI_UA: &str = "claude-cli/2.1.220 (external, claude-desktop)";
+/// Oh My Pi `buildCoworkBetas(true, true)` plus `oauth-2025-04-20`.
+/// `context-1m-2025-08-07` is omitted on purpose (subscription 429).
+const OAUTH_INFERENCE_BETAS: &str = "oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,advanced-tool-use-2025-11-20,effort-2025-11-24,fallback-credit-2026-06-01";
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const TOKEN_TIMEOUT: Duration = Duration::from_secs(30);
 const REFRESH_SKEW_SECS: i64 = 5 * 60;
@@ -432,23 +436,36 @@ fn refresh_access_token_blocking(refresh: &str) -> Result<ClaudeToken, VendorLog
     token_from_json(&body, "refresh")
 }
 
-/// OAuth Messages requests must not send `x-api-key`.
+/// OAuth Messages requests must not send `x-api-key`. Fingerprint headers
+/// overwrite (OMP `enforcedHeaderKeys`) so a leftover thin beta list cannot
+/// ride through.
 pub(super) fn inject_request_headers(headers: &mut indexmap::IndexMap<String, String>) {
-    headers
-        .entry("anthropic-version".into())
-        .or_insert_with(|| "2023-06-01".into());
-    headers.entry("anthropic-beta".into()).or_insert_with(|| {
-        format!("{OAUTH_BETA},claude-code-20250219,interleaved-thinking-2025-05-14")
-    });
-    headers
-        .entry("User-Agent".into())
-        .or_insert_with(|| CLAUDE_CLI_UA.to_owned());
-    headers
-        .entry("anthropic-dangerous-direct-browser-access".into())
-        .or_insert_with(|| "true".into());
-    headers
-        .entry("x-app".into())
-        .or_insert_with(|| "cli".into());
+    headers.insert("anthropic-version".into(), "2023-06-01".into());
+    headers.insert("anthropic-beta".into(), OAUTH_INFERENCE_BETAS.to_owned());
+    headers.insert("User-Agent".into(), CLAUDE_CLI_UA.to_owned());
+    headers.insert(
+        "anthropic-dangerous-direct-browser-access".into(),
+        "true".into(),
+    );
+    headers.insert("x-app".into(), "cli".into());
+    // Oh My Pi `coworkHeaders` — Cowork's Linux Claude runtime fingerprint.
+    headers.insert("X-Stainless-Arch".into(), stainless_arch());
+    headers.insert("X-Stainless-Lang".into(), "js".into());
+    headers.insert("X-Stainless-OS".into(), "Linux".into());
+    headers.insert("X-Stainless-Package-Version".into(), "0.94.0".into());
+    headers.insert("X-Stainless-Retry-Count".into(), "0".into());
+    headers.insert("X-Stainless-Runtime".into(), "node".into());
+    headers.insert("X-Stainless-Runtime-Version".into(), "v26.3.0".into());
+    headers.insert("X-Stainless-Timeout".into(), "600".into());
+}
+
+fn stainless_arch() -> String {
+    match std::env::consts::ARCH {
+        "aarch64" | "arm64" => "arm64".into(),
+        "x86_64" | "amd64" => "x64".into(),
+        "x86" | "i686" => "x86".into(),
+        other => format!("other::{other}"),
+    }
 }
 
 fn random_state() -> String {
@@ -539,11 +556,33 @@ fn callback_code(request: &str, expected_state: &str) -> Result<String, String> 
 
 #[cfg(test)]
 mod tests {
-    use super::{CLIENT_ID, parse_claude_input};
+    use super::{CLIENT_ID, OAUTH_INFERENCE_BETAS, inject_request_headers, parse_claude_input};
 
     #[test]
     fn client_id_is_claude_code_public_app() {
         assert_eq!(CLIENT_ID, "9d1c250a-e61b-44d9-88ed-5944d1962f5e");
+    }
+
+    #[test]
+    fn injects_omp_cowork_inference_headers() {
+        let mut headers = indexmap::IndexMap::new();
+        headers.insert(
+            "anthropic-beta".into(),
+            "oauth-2025-04-20,claude-code-20250219".into(),
+        );
+        inject_request_headers(&mut headers);
+        assert_eq!(headers["anthropic-beta"], OAUTH_INFERENCE_BETAS);
+        assert!(headers["anthropic-beta"].contains("oauth-2025-04-20"));
+        assert!(headers["anthropic-beta"].contains("fallback-credit-2026-06-01"));
+        assert!(!headers["anthropic-beta"].contains("context-1m-2025-08-07"));
+        assert_eq!(
+            headers["User-Agent"],
+            "claude-cli/2.1.220 (external, claude-desktop)"
+        );
+        assert_eq!(headers["x-app"], "cli");
+        assert_eq!(headers["X-Stainless-OS"], "Linux");
+        assert_eq!(headers["X-Stainless-Lang"], "js");
+        assert_eq!(headers["X-Stainless-Package-Version"], "0.94.0");
     }
 
     #[test]

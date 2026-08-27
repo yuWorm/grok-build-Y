@@ -1,4 +1,4 @@
-//! Third-party Responses JSON sanitizer.
+//! Third-party request/response shims (Codex Responses + Claude OAuth).
 //!
 //! `async-openai`'s Responses types treat `output_text.annotations` and
 //! output-item `id` as required. xAI always sends them; OpenAI and many
@@ -15,7 +15,12 @@
 
 use std::collections::BTreeMap;
 
+use indexmap::IndexMap;
 use serde_json::{Map, Value};
+use xai_grok_sampling_types::messages::{
+    ContentBlock, MessageContent, MessageStreamEvent, MessagesRequest, MessagesResponse,
+    SystemParam, TextBlock, ToolChoiceParam,
+};
 use xai_grok_sampling_types::{ApiBackend, ConversationItem, ConversationResponse, ToolCall, rs};
 
 use crate::events::{SamplingChannel, SamplingEvent};
@@ -521,6 +526,175 @@ fn system_message_text(item: &rs::InputItem) -> Option<String> {
     })
 }
 
+// ---------------------------------------------------------------------------
+// Claude Pro/Max OAuth (Oh My Pi `buildAnthropicHeaders` / tool prefix /
+// `claudeCodeSystemInstruction`). `cch` billing attestation is intentionally
+// not ported — send the SDK identity + Cowork tool prefix only.
+// ---------------------------------------------------------------------------
+
+/// Oh My Pi `claudeCodeSystemInstruction`. First system block on OAuth
+/// Messages requests (OMP puts billing attestation in front of this; we skip
+/// `cch`, so this is `system[0]`).
+pub(crate) const CLAUDE_CODE_SYSTEM_INSTRUCTION: &str =
+    "You are a Claude agent, built on Anthropic's Claude Agent SDK.";
+
+/// Oh My Pi `claudeToolPrefix`. Applied once on the way out; stripped once
+/// on the way back.
+pub(crate) const CLAUDE_TOOL_PREFIX: &str = "_";
+
+const ANTHROPIC_BUILTIN_TOOL_NAMES: &[&str] =
+    &["web_search", "code_execution", "text_editor", "computer"];
+
+pub(crate) fn is_anthropic_oauth_token(token: &str) -> bool {
+    token.contains("sk-ant-oat")
+}
+
+fn header_value_ignore_case<'a>(
+    extra_headers: &'a IndexMap<String, String>,
+    name: &str,
+) -> Option<&'a str> {
+    extra_headers
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case(name))
+        .map(|(_, value)| value.as_str())
+}
+
+/// True when this sampling client is the Claude Pro/Max OAuth slot.
+pub(crate) fn is_claude_oauth_client(
+    api_key: Option<&str>,
+    extra_headers: &IndexMap<String, String>,
+) -> bool {
+    api_key.is_some_and(is_anthropic_oauth_token)
+        || header_value_ignore_case(extra_headers, "anthropic-beta").is_some_and(|betas| {
+            betas
+                .split(',')
+                .any(|token| token.trim() == "oauth-2025-04-20")
+        })
+}
+
+/// Cowork `User-Agent` from extra_headers, if the session injected one.
+pub(crate) fn claude_oauth_user_agent(extra_headers: &IndexMap<String, String>) -> Option<&str> {
+    let ua = header_value_ignore_case(extra_headers, "user-agent")?;
+    ua.to_ascii_lowercase()
+        .starts_with("claude-cli")
+        .then_some(ua)
+}
+
+/// Oh My Pi `applyClaudeToolPrefix`: always prepend (no already-prefixed
+/// short-circuit) so a tool literally named `_foo` round-trips.
+pub(crate) fn apply_claude_tool_prefix(name: &str) -> String {
+    if ANTHROPIC_BUILTIN_TOOL_NAMES
+        .iter()
+        .any(|builtin| name.eq_ignore_ascii_case(builtin))
+    {
+        return name.to_owned();
+    }
+    format!("{CLAUDE_TOOL_PREFIX}{name}")
+}
+
+pub(crate) fn strip_claude_tool_prefix(name: &str) -> String {
+    name.strip_prefix(CLAUDE_TOOL_PREFIX)
+        .unwrap_or(name)
+        .to_owned()
+}
+
+/// GROK_COMPAT_HOOK: Claude OAuth Messages body — SDK identity + `_` tool
+/// names. Cache breakpoints on the caller's system prompt are left in place;
+/// the identity block itself is never cached.
+pub(crate) fn prepare_claude_oauth_messages(req: &mut MessagesRequest) {
+    inject_claude_system_instruction(req);
+    prefix_claude_oauth_tools(req);
+}
+
+fn inject_claude_system_instruction(req: &mut MessagesRequest) {
+    let already_present = match &req.system {
+        Some(SystemParam::Text(text)) => text == CLAUDE_CODE_SYSTEM_INSTRUCTION,
+        Some(SystemParam::Blocks(blocks)) => blocks
+            .iter()
+            .any(|block| block.text == CLAUDE_CODE_SYSTEM_INSTRUCTION),
+        None => false,
+    };
+    if already_present {
+        return;
+    }
+    let instruction = TextBlock {
+        r#type: "text".into(),
+        text: CLAUDE_CODE_SYSTEM_INSTRUCTION.into(),
+        cache_control: None,
+    };
+    req.system = Some(match req.system.take() {
+        None => SystemParam::Blocks(vec![instruction]),
+        Some(SystemParam::Text(text)) => SystemParam::Blocks(vec![
+            instruction,
+            TextBlock {
+                r#type: "text".into(),
+                text,
+                cache_control: None,
+            },
+        ]),
+        Some(SystemParam::Blocks(mut blocks)) => {
+            blocks.insert(0, instruction);
+            SystemParam::Blocks(blocks)
+        }
+    });
+}
+
+fn prefix_claude_oauth_tools(req: &mut MessagesRequest) {
+    if let Some(tools) = &mut req.tools {
+        for tool in tools {
+            tool.name = apply_claude_tool_prefix(&tool.name);
+        }
+    }
+    if let Some(ToolChoiceParam::Tool { name }) = &mut req.tool_choice {
+        *name = apply_claude_tool_prefix(name);
+    }
+    for message in &mut req.messages {
+        if let MessageContent::Blocks(blocks) = &mut message.content {
+            for block in blocks {
+                if let ContentBlock::ToolUse { name, .. } = block {
+                    *name = apply_claude_tool_prefix(name);
+                }
+            }
+        }
+    }
+}
+
+pub(crate) fn strip_claude_oauth_response_tools(resp: &mut MessagesResponse) {
+    for block in &mut resp.content {
+        strip_tool_use_name(block);
+    }
+}
+
+pub(crate) fn strip_claude_oauth_stream_event(event: &mut MessageStreamEvent) {
+    match event {
+        MessageStreamEvent::MessageStart { message } => {
+            strip_claude_oauth_response_tools(message);
+        }
+        MessageStreamEvent::ContentBlockStart { content_block, .. } => {
+            strip_tool_use_name(content_block);
+        }
+        _ => {}
+    }
+}
+
+fn strip_tool_use_name(block: &mut ContentBlock) {
+    if let ContentBlock::ToolUse { name, .. } = block {
+        *name = strip_claude_tool_prefix(name);
+    }
+}
+
+/// GROK_COMPAT_HOOK: Claude OAuth request headers (no `x-grok-*`).
+pub(crate) fn apply_claude_oauth_request_headers(
+    mut builder: reqwest::RequestBuilder,
+    session_id: &str,
+) -> reqwest::RequestBuilder {
+    builder = builder.header("x-client-request-id", uuid::Uuid::new_v4().to_string());
+    if !session_id.is_empty() {
+        builder = builder.header("X-Claude-Code-Session-Id", session_id);
+    }
+    builder
+}
+
 #[cfg(test)]
 mod tests {
     use super::sanitize_response_event_json;
@@ -745,5 +919,127 @@ mod tests {
         assert!(sanitize_response_event_json(&mut value));
         assert_eq!(value["part"]["annotations"], json!([]));
         assert!(value.get("id").is_none());
+    }
+
+    #[test]
+    fn claude_oauth_detected_from_oat_token_or_beta_header() {
+        let mut headers = indexmap::IndexMap::new();
+        assert!(super::is_claude_oauth_client(
+            Some("sk-ant-oat-test"),
+            &headers
+        ));
+        assert!(!super::is_claude_oauth_client(
+            Some("sk-ant-api03-test"),
+            &headers
+        ));
+        headers.insert(
+            "anthropic-beta".into(),
+            "oauth-2025-04-20,claude-code-20250219".into(),
+        );
+        assert!(super::is_claude_oauth_client(
+            Some("sk-ant-api03-test"),
+            &headers
+        ));
+    }
+
+    #[test]
+    fn claude_oauth_messages_inject_system_and_prefix_tools() {
+        use xai_grok_sampling_types::messages::{
+            ContentBlock, Message, MessageContent, MessageRole, MessagesRequest, SystemParam,
+            ToolChoiceParam, ToolParam,
+        };
+
+        let mut req = MessagesRequest {
+            model: "claude-opus-4-6".into(),
+            messages: vec![Message {
+                role: MessageRole::Assistant,
+                content: MessageContent::Blocks(vec![ContentBlock::ToolUse {
+                    id: "t1".into(),
+                    name: "bash".into(),
+                    input: json!({}),
+                    cache_control: None,
+                }]),
+            }],
+            max_tokens: 1024,
+            system: Some(SystemParam::Text("Stay concise.".into())),
+            tools: Some(vec![
+                ToolParam {
+                    name: "bash".into(),
+                    description: Some("run".into()),
+                    input_schema: json!({"type": "object"}),
+                },
+                ToolParam {
+                    name: "web_search".into(),
+                    description: None,
+                    input_schema: json!({"type": "object"}),
+                },
+            ]),
+            tool_choice: Some(ToolChoiceParam::Tool {
+                name: "bash".into(),
+            }),
+            ..Default::default()
+        };
+        super::prepare_claude_oauth_messages(&mut req);
+
+        let SystemParam::Blocks(blocks) = req.system.as_ref().expect("system") else {
+            panic!("expected system blocks");
+        };
+        assert_eq!(blocks[0].text, super::CLAUDE_CODE_SYSTEM_INSTRUCTION);
+        assert!(blocks[0].cache_control.is_none());
+        assert_eq!(blocks[1].text, "Stay concise.");
+
+        let tools = req.tools.as_ref().expect("tools");
+        assert_eq!(tools[0].name, "_bash");
+        assert_eq!(tools[1].name, "web_search");
+        assert!(
+            matches!(req.tool_choice, Some(ToolChoiceParam::Tool { ref name }) if name == "_bash")
+        );
+        let MessageContent::Blocks(history) = &req.messages[0].content else {
+            panic!("expected history blocks");
+        };
+        assert!(matches!(&history[0], ContentBlock::ToolUse { name, .. } if name == "_bash"));
+
+        super::prepare_claude_oauth_messages(&mut req);
+        let SystemParam::Blocks(blocks) = req.system.as_ref().expect("system") else {
+            panic!("expected system blocks");
+        };
+        assert_eq!(
+            blocks
+                .iter()
+                .filter(|b| b.text == super::CLAUDE_CODE_SYSTEM_INSTRUCTION)
+                .count(),
+            1,
+            "identity block must be idempotent"
+        );
+    }
+
+    #[test]
+    fn claude_tool_prefix_round_trip_preserves_literal_underscore_names() {
+        assert_eq!(super::apply_claude_tool_prefix("bash"), "_bash");
+        assert_eq!(super::strip_claude_tool_prefix("_bash"), "bash");
+        assert_eq!(super::apply_claude_tool_prefix("_foo"), "__foo");
+        assert_eq!(super::strip_claude_tool_prefix("__foo"), "_foo");
+        assert_eq!(super::apply_claude_tool_prefix("web_search"), "web_search");
+        assert_eq!(super::strip_claude_tool_prefix("bash"), "bash");
+    }
+
+    #[test]
+    fn claude_oauth_stream_event_strips_tool_prefix() {
+        use xai_grok_sampling_types::messages::{ContentBlock, MessageStreamEvent};
+
+        let mut event = MessageStreamEvent::ContentBlockStart {
+            index: 0,
+            content_block: ContentBlock::ToolUse {
+                id: "t1".into(),
+                name: "_bash".into(),
+                input: json!({}),
+                cache_control: None,
+            },
+        };
+        super::strip_claude_oauth_stream_event(&mut event);
+        let MessageStreamEvent::ContentBlockStart { content_block, .. } = event else {
+            panic!("expected content_block_start");
+        };
+        assert!(matches!(content_block, ContentBlock::ToolUse { name, .. } if name == "bash"));
     }
 }
