@@ -1,0 +1,23 @@
+# Cheap PR checks. Full groky binaries are built by release.yml on tag.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/**"
+      - ".github/workflows/**"
+      - "crates/codegen/xai-grok-pager-bin/Cargo.toml"
+
+jobs:
+  scripts:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Shell syntax
+        run: |
+          bash -n scripts/install-groky.sh
+          bash -n scripts/merge-upstream.sh
+          bash -n scripts/sync-models-dev.sh
+          bash -n scripts/tui.sh

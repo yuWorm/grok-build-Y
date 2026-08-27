@@ -4,7 +4,9 @@ version = "1.0.10"
 edition.workspace = true
 license = "Apache-2.0"
 authors = ["xAI"]
-default-run = "xai-grok-pager"
+# GROK_COMPAT_HOOK: product CLI is `groky`. Keep `xai-grok-pager` so upstream
+# `cargo run -p xai-grok-pager-bin` docs still resolve.
+default-run = "groky"
 
 # Composition-root binary for the Grok Build TUI. The artifact is still named
 # `xai-grok-pager`. This package exists so the binary can link both the pager
@@ -13,6 +15,10 @@ default-run = "xai-grok-pager"
 # (cargo cycle). The binary installs the minimal-mode IoC hooks at startup.
 [[bin]]
 name = "xai-grok-pager"
+path = "src/main.rs"
+
+[[bin]]
+name = "groky"
 path = "src/main.rs"
 
 [dependencies]

@@ -5,7 +5,7 @@ This tree is a **product fork**. Vendor/Codex code lives beside grok:
 - New files under `compat/`, `dispatch/vendor.rs`, `/provider-login`
 - Marked `GROK_COMPAT_HOOK` sites in grok files
 - `upstream` = `https://github.com/xai-org/grok-build.git` (fetch only)
-- `origin` = this product fork (push here)
+- `origin` = https://github.com/yuWorm/grok-build-Y.git (push here)
 
 Do **not** rebase onto every `Synced from monorepo` snapshot. Merge when you
 want a grok fix or feature (about every 1–2 weeks is enough).
@@ -14,7 +14,7 @@ want a grok fix or feature (about every 1–2 weeks is enough).
 
 ```bash
 git remote rename origin upstream   # if origin still points at xai-org
-git remote add origin git@github.com:<you>/grok-build.git
+git remote add origin git@github.com:yuWorm/grok-build-Y.git
 git fetch upstream
 git config rerere.enabled true
 ```

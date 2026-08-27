@@ -21,4 +21,4 @@ echo "fork TUI  (not $(command -v grok 2>/dev/null || echo grok))" >&2
 echo "cwd       $sandbox" >&2
 echo "try       /provider-login openai   then   /model" >&2
 
-exec cargo run -q -p xai-grok-pager-bin -- --cwd "$sandbox" --trust "$@"
+exec cargo run -q -p xai-grok-pager-bin --bin groky -- --cwd "$sandbox" --trust "$@"

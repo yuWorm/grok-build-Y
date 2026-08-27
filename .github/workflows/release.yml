@@ -1,0 +1,151 @@
+# Build the product CLI (`groky`) and attach it to a GitHub Release.
+#
+# Reuses the upstream composition-root crate (`xai-grok-pager-bin`) and
+# rust-toolchain.toml. Does not call x.ai/cli — that CDN is official grok.
+#
+#   git tag v0.1.0 && git push origin v0.1.0
+#   # or Actions → Release groky → Run workflow
+name: Release groky
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v0.1.0). Created if missing."
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  # Native runner per target so jemalloc/protoc do not need cross.
+  # Asset names match grok's gh-release pattern: {bin}-{version}-{os}-{arch}
+
+jobs:
+  build:
+    name: groky ${{ matrix.artifact_os }}-${{ matrix.artifact_arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            artifact_os: macos
+            artifact_arch: aarch64
+            rust_target: aarch64-apple-darwin
+          - runner: macos-14
+            artifact_os: macos
+            artifact_arch: x86_64
+            rust_target: x86_64-apple-darwin
+          - runner: ubuntu-24.04
+            artifact_os: linux
+            artifact_arch: x86_64
+            rust_target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            artifact_os: linux
+            artifact_arch: aarch64
+            rust_target: aarch64-unknown-linux-gnu
+          - runner: windows-latest
+            artifact_os: windows
+            artifact_arch: x86_64
+            rust_target: x86_64-pc-windows-msvc
+            exe: ".exe"
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install protobuf (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler pkg-config libssl-dev
+
+      - name: Install protobuf (macOS)
+        if: runner.os == 'macOS'
+        run: brew install protobuf
+
+      - name: Install protobuf (Windows)
+        if: runner.os == 'Windows'
+        run: choco install protoc -y
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.94.0"
+          targets: ${{ matrix.rust_target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: groky-${{ matrix.rust_target }}
+          cache-targets: true
+
+      - name: Build groky
+        run: |
+          cargo build -p xai-grok-pager-bin --locked --release --bin groky --target ${{ matrix.rust_target }} --features release-dist
+
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          version="${tag#v}"
+          exe="${{ matrix.exe }}"
+          src="target/${{ matrix.rust_target }}/release/groky${exe}"
+          dest="groky-${version}-${{ matrix.artifact_os }}-${{ matrix.artifact_arch }}${exe}"
+          if [[ "${{ runner.os }}" != "Windows" ]]; then
+            strip "$src" || true
+            chmod +x "$src"
+          fi
+          cp "$src" "$dest"
+          if command -v sha256sum >/dev/null; then
+            sha256sum "$dest" > "${dest}.sha256"
+          else
+            shasum -a 256 "$dest" > "${dest}.sha256"
+          fi
+          echo "ASSET=$dest" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ASSET }}
+          path: |
+            groky-*
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            git config user.name "groky-ci"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag "$tag" 2>/dev/null || true
+            git push origin "refs/tags/$tag" 2>/dev/null || true
+          fi
+          ls -la dist
+          notes="groky ${tag#v}
+
+          One-click install:
+          \`\`\`sh
+          curl -fsSL https://raw.githubusercontent.com/yuWorm/grok-build-Y/main/scripts/install-groky.sh | bash
+          \`\`\`
+          "
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" dist/groky-* --clobber
+          else
+            gh release create "$tag" dist/groky-* --title "groky ${tag#v}" --notes "$notes"
+          fi
