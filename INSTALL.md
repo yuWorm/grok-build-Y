@@ -1,5 +1,8 @@
 # Install groky
 
+One-click install is documented in [README.md](README.md) / [README.zh.md](README.zh.md).
+This page is the release appendix (asset names, Windows).
+
 `groky` is the product CLI for this fork ([yuWorm/groky](https://github.com/yuWorm/groky)).
 It is the same TUI as Grok Build (`xai-grok-pager-bin`), shipped under a
 different binary name so it can sit next to official `grok`.

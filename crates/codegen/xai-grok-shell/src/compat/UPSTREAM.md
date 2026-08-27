@@ -4,6 +4,7 @@ This tree is a **product fork**. Vendor/Codex code lives beside grok:
 
 - New files under `compat/`, `dispatch/vendor.rs`, `/provider-login`
 - Marked `GROK_COMPAT_HOOK` sites in grok files
+- Root `README.md` / `README.zh.md` are product docs — keep ours on merge
 - `upstream` = `https://github.com/xai-org/grok-build.git` (fetch only)
 - `origin` = https://github.com/yuWorm/groky.git (push here)
 
