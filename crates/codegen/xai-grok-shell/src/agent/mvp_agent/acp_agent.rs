@@ -1648,7 +1648,6 @@ impl acp::Agent for MvpAgent {
                                 hostname: Some(hostname),
                                 device_id,
                                 parent_session_id: None,
-                                session_kind: None,
                                 subagent_type: None,
                                 subagent_persona: None,
                                 subagent_role: None,
