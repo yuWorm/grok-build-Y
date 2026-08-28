@@ -15,6 +15,7 @@ members = [
     "crates/codegen/xai-codebase-graph",
     "crates/codegen/xai-compaction-transcript",
     "crates/codegen/xai-crash-handler",
+    "crates/codegen/xai-dirs",
     "crates/codegen/xai-fast-worktree",
     "crates/codegen/xai-file-utils",
     "crates/codegen/xai-fsnotify",
@@ -27,11 +28,11 @@ members = [
     "crates/codegen/xai-grok-bundle",
     "crates/codegen/xai-grok-config",
     "crates/codegen/xai-grok-config-types",
+    "crates/codegen/xai-grok-dashboard-store",
     "crates/codegen/xai-grok-diag-server",
     "crates/codegen/xai-grok-env",
     "crates/codegen/xai-grok-extra-ca",
     "crates/codegen/xai-grok-foreign-sessions",
-    "crates/codegen/xai-grok-home",
     "crates/codegen/xai-grok-hooks",
     "crates/codegen/xai-grok-http",
     "crates/codegen/xai-grok-markdown",
@@ -271,7 +272,7 @@ tiny-skia = "0.12"
 tokio = { version = "1", features = ["full"] }
 tokio-retry = "0.3"
 tokio-stream = { version = "0.1", features = ["net"] }
-tokio-tungstenite = "0.27"
+tokio-tungstenite = "0.28"
 tokio-util = { version = "0.7", features = ["rt"] }
 toml = "0.9"
 toml_edit = "0.22"
@@ -311,6 +312,7 @@ xai-circuit-breaker = { path = "crates/common/xai-circuit-breaker" }
 xai-compaction-transcript = { path = "crates/codegen/xai-compaction-transcript" }
 xai-computer-hub-core = { path = "crates/common/xai-computer-hub-core" }
 xai-computer-hub-sdk = { path = "crates/common/xai-computer-hub-sdk" }
+xai-dirs = { path = "crates/codegen/xai-dirs" }
 xai-fuzzy-file-search = { path = "crates/codegen/xai-fuzzy-file-search" }
 xai-gix-status = { path = "crates/codegen/xai-gix-status" }
 xai-grok-active-sessions = { path = "crates/codegen/xai-grok-active-sessions" }
@@ -320,11 +322,11 @@ xai-grok-auth = { path = "crates/codegen/xai-grok-auth" }
 xai-grok-bundle = { path = "crates/codegen/xai-grok-bundle" }
 xai-grok-config = { path = "crates/codegen/xai-grok-config" }
 xai-grok-config-types = { path = "crates/codegen/xai-grok-config-types" }
+xai-grok-dashboard-store = { path = "crates/codegen/xai-grok-dashboard-store" }
 xai-grok-diag-server = { path = "crates/codegen/xai-grok-diag-server" }
 xai-grok-env = { path = "crates/codegen/xai-grok-env" }
 xai-grok-extra-ca = { path = "crates/codegen/xai-grok-extra-ca" }
 xai-grok-foreign-sessions = { path = "crates/codegen/xai-grok-foreign-sessions" }
-xai-grok-home = { path = "crates/codegen/xai-grok-home" }
 xai-grok-http = { path = "crates/codegen/xai-grok-http" }
 xai-grok-markdown = { path = "crates/codegen/xai-grok-markdown" }
 xai-grok-markdown-core = { path = "crates/codegen/xai-grok-markdown-core" }

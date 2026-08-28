@@ -109,6 +109,9 @@ impl ChatStateActor {
             prompt_cache_key: None,
             reasoning_effort: self.state.sampling_config.reasoning_effort,
             json_schema: None,
+            // Default: callers that can use partial output opt into
+            // `CompletePartial`.
+            length_policy: xai_grok_sampling_types::LengthPolicy::Fail,
         }
     }
 }

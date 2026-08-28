@@ -10,6 +10,7 @@ mod other;
 mod read;
 pub mod search;
 mod search_tool;
+mod sent_message;
 mod use_tool;
 mod web_fetch;
 mod web_search;
@@ -32,6 +33,7 @@ pub use search::{
 pub use search_tool::{
     DiscoveredTool, SearchToolCallBlock as IntegrationSearchToolCallBlock, discovered_tool_action,
 };
+pub use sent_message::{SentMessagePresentation, SentMessageToolCallBlock};
 pub use use_tool::UseToolCallBlock;
 pub use web_fetch::WebFetchToolCallBlock;
 pub use web_search::WebSearchToolCallBlock;
@@ -109,6 +111,8 @@ pub enum VerbGroupKind {
     EditFile,
     /// MCP tool dispatches (`use_tool`). Label-only, like [`Self::Command`].
     McpCall,
+    /// Sent subagent messages. Label-only, like [`Self::Command`].
+    Message,
     /// Unclassified tools. Label-only, like [`Self::Command`].
     OtherTool,
 }
@@ -127,6 +131,7 @@ impl VerbGroupKind {
             VerbGroupKind::Subagent | VerbGroupKind::Command | VerbGroupKind::OtherTool => {
                 ("Ran", "Running")
             }
+            VerbGroupKind::Message => ("Sent", "Sending"),
             VerbGroupKind::EditFile => ("Edited", "Editing"),
             VerbGroupKind::McpCall => ("Called", "Calling"),
         };
@@ -145,6 +150,7 @@ impl VerbGroupKind {
             VerbGroupKind::IntegrationSearch | VerbGroupKind::McpCall => ("MCP tool", "MCP tools"),
             VerbGroupKind::Subagent => ("subagent", "subagents"),
             VerbGroupKind::Command => ("command", "commands"),
+            VerbGroupKind::Message => ("message", "messages"),
             VerbGroupKind::OtherTool => ("tool", "tools"),
         };
         if count == 1 { one } else { many }
@@ -177,6 +183,7 @@ pub enum ToolCallBlock {
     UseTool(UseToolCallBlock),
     /// Memory search with structured result display.
     MemorySearch(MemorySearchToolCallBlock),
+    SentMessage(SentMessageToolCallBlock),
     /// Skill invocation (user skills / slash commands via the Skill tool).
     Skill(OtherToolCallBlock),
     /// Other/unknown tool types.
@@ -200,6 +207,7 @@ macro_rules! delegate_tool {
             ToolCallBlock::IntegrationSearch(b) => b.$method($($arg),*),
             ToolCallBlock::UseTool(b) => b.$method($($arg),*),
             ToolCallBlock::MemorySearch(b) => b.$method($($arg),*),
+            ToolCallBlock::SentMessage(b) => b.$method($($arg),*),
             ToolCallBlock::Skill(b) => b.$method($($arg),*),
             ToolCallBlock::Other(b) => b.$method($($arg),*),
             ToolCallBlock::Lifecycle(b) => b.$method($($arg),*),
@@ -332,14 +340,32 @@ impl ToolCallBlock {
             (ToolCallBlock::UseTool(new), ToolCallBlock::UseTool(old)) => {
                 new.started_at = old.started_at;
             }
+            (ToolCallBlock::SentMessage(new), ToolCallBlock::SentMessage(old)) => {
+                new.started_at = old.started_at;
+            }
             (ToolCallBlock::Skill(new), ToolCallBlock::Skill(old)) => {
                 new.started_at = old.started_at;
             }
             (ToolCallBlock::Other(new), ToolCallBlock::Other(old)) => {
                 new.started_at = old.started_at;
             }
-            // Variant mismatch (shouldn't happen in practice) — skip.
-            _ => {}
+            (
+                ToolCallBlock::Execute(_)
+                | ToolCallBlock::Read(_)
+                | ToolCallBlock::Edit(_)
+                | ToolCallBlock::ListDir(_)
+                | ToolCallBlock::Search(_)
+                | ToolCallBlock::WebFetch(_)
+                | ToolCallBlock::WebSearch(_)
+                | ToolCallBlock::IntegrationSearch(_)
+                | ToolCallBlock::UseTool(_)
+                | ToolCallBlock::MemorySearch(_)
+                | ToolCallBlock::SentMessage(_)
+                | ToolCallBlock::Skill(_)
+                | ToolCallBlock::Other(_)
+                | ToolCallBlock::Lifecycle(_),
+                _,
+            ) => {}
         }
     }
 
@@ -356,6 +382,7 @@ impl ToolCallBlock {
             ToolCallBlock::IntegrationSearch(b) => b.is_success(),
             ToolCallBlock::UseTool(b) => b.is_success(),
             ToolCallBlock::MemorySearch(b) => b.is_success(),
+            ToolCallBlock::SentMessage(b) => b.is_success(),
             ToolCallBlock::Skill(b) => b.is_success(),
             ToolCallBlock::Other(b) => b.is_success(),
             ToolCallBlock::Lifecycle(_) => true,
@@ -379,6 +406,7 @@ impl ToolCallBlock {
             ToolCallBlock::IntegrationSearch(b) => b.started_at = Some(instant),
             ToolCallBlock::UseTool(b) => b.started_at = Some(instant),
             ToolCallBlock::MemorySearch(b) => b.started_at = Some(instant),
+            ToolCallBlock::SentMessage(b) => b.started_at = Some(instant),
             ToolCallBlock::Skill(b) => b.started_at = Some(instant),
             ToolCallBlock::Other(b) => b.started_at = Some(instant),
             // Lifecycle events have no timing.
@@ -439,6 +467,11 @@ impl ToolCallBlock {
                 }
             }
             ToolCallBlock::MemorySearch(b) => {
+                if b.started_at.is_none() {
+                    b.started_at = Some(std::time::Instant::now());
+                }
+            }
+            ToolCallBlock::SentMessage(b) => {
                 if b.started_at.is_none() {
                     b.started_at = Some(std::time::Instant::now());
                 }
@@ -554,6 +587,7 @@ impl ToolCallBlock {
                 }));
                 join_searchable([Some(b.query.clone()), results, b.error.clone()])
             }
+            ToolCallBlock::SentMessage(b) => b.searchable_text(),
             ToolCallBlock::Skill(b) | ToolCallBlock::Other(b) => join_searchable([
                 Some(b.name.clone()),
                 Some(b.summary.clone()),
@@ -583,6 +617,7 @@ impl ToolCallBlock {
             ToolCallBlock::Execute(_)
             | ToolCallBlock::Edit(_)
             | ToolCallBlock::UseTool(_)
+            | ToolCallBlock::SentMessage(_)
             | ToolCallBlock::Other(_)
             | ToolCallBlock::Lifecycle(_) => None,
         }
@@ -599,6 +634,7 @@ impl ToolCallBlock {
             ToolCallBlock::Execute(_) => Some(VerbGroupKind::Command),
             ToolCallBlock::Edit(_) => Some(VerbGroupKind::EditFile),
             ToolCallBlock::UseTool(_) => Some(VerbGroupKind::McpCall),
+            ToolCallBlock::SentMessage(_) => Some(VerbGroupKind::Message),
             ToolCallBlock::Other(_) => Some(VerbGroupKind::OtherTool),
             ToolCallBlock::Lifecycle(_) => None,
             ToolCallBlock::Read(_)
@@ -639,6 +675,8 @@ mod tests {
         assert_eq!(VerbGroupKind::EditFile.verb(true), "Editing");
         assert_eq!(VerbGroupKind::McpCall.verb(false), "Called");
         assert_eq!(VerbGroupKind::McpCall.verb(true), "Calling");
+        assert_eq!(VerbGroupKind::Message.verb(false), "Sent");
+        assert_eq!(VerbGroupKind::Message.verb(true), "Sending");
         assert_eq!(VerbGroupKind::OtherTool.verb(false), "Ran");
     }
 
@@ -662,6 +700,8 @@ mod tests {
         assert_eq!(VerbGroupKind::Command.noun(2), "commands");
         assert_eq!(VerbGroupKind::EditFile.noun(2), "files");
         assert_eq!(VerbGroupKind::McpCall.noun(1), "MCP tool");
+        assert_eq!(VerbGroupKind::Message.noun(1), "message");
+        assert_eq!(VerbGroupKind::Message.noun(2), "messages");
         assert_eq!(VerbGroupKind::OtherTool.noun(1), "tool");
         assert_eq!(VerbGroupKind::OtherTool.noun(2), "tools");
     }
@@ -680,6 +720,11 @@ mod tests {
             ToolCallBlock::IntegrationSearch(IntegrationSearchToolCallBlock::new("linear")),
             ToolCallBlock::UseTool(UseToolCallBlock::new("linear__save_issue")),
             ToolCallBlock::MemorySearch(MemorySearchToolCallBlock::new("auth")),
+            ToolCallBlock::SentMessage(SentMessageToolCallBlock::new(
+                SentMessagePresentation::Sent,
+                Some("sub-123".into()),
+                Some("hello".into()),
+            )),
             ToolCallBlock::Skill(OtherToolCallBlock::new("Skill", "deploy")),
             ToolCallBlock::Other(OtherToolCallBlock::new("todo_write", "update")),
             ToolCallBlock::Lifecycle(LifecycleEventBlock::new("session_start")),
@@ -700,6 +745,7 @@ mod tests {
                 ToolCallBlock::Execute(_)
                 | ToolCallBlock::Edit(_)
                 | ToolCallBlock::UseTool(_)
+                | ToolCallBlock::SentMessage(_)
                 | ToolCallBlock::Other(_)
                 | ToolCallBlock::Lifecycle(_) => None,
             };
@@ -720,6 +766,15 @@ mod tests {
         assert_eq!(
             ToolCallBlock::UseTool(UseToolCallBlock::new("linear__save_issue")).label_kind(),
             Some(VerbGroupKind::McpCall)
+        );
+        assert_eq!(
+            ToolCallBlock::SentMessage(SentMessageToolCallBlock::new(
+                SentMessagePresentation::Sent,
+                None,
+                None,
+            ))
+            .label_kind(),
+            Some(VerbGroupKind::Message)
         );
         assert_eq!(
             ToolCallBlock::Other(OtherToolCallBlock::new("todo_write", "update")).label_kind(),

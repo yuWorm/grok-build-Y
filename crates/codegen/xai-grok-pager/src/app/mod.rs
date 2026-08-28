@@ -18,6 +18,8 @@ pub(crate) mod cancel_latency;
 pub mod cli;
 pub mod consent;
 pub use crate::link_opener;
+use xai_grok_telemetry::region;
+use xai_grok_telemetry::region::Parent;
 /// Off-thread full-file syntax highlight upgrade for edit diffs.
 pub mod edit_highlight_worker;
 /// Off-thread Mermaid diagram render worker (out of process) + per-session cache.
@@ -58,6 +60,7 @@ mod session_load_barrier;
 pub mod signal_handler;
 mod startup_failure;
 mod turn_completion;
+pub(crate) mod workspace_sync;
 mod xt_filter;
 pub(crate) use crate::terminal::{kitty_flags_pushed, kitty_releases_reported};
 pub use cli::{
@@ -551,6 +554,7 @@ pub fn join_early_prefetch(
             Err(_) => None,
         };
     }
+    let _wait_span = region!("startup.prefetch_join_wait", Parent::Inherit);
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let _ = tx.send(handle.join());
@@ -968,6 +972,10 @@ pub async fn run(
             },
         ),
     );
+    if args.log_sampling {
+        unsafe { std::env::set_var("GROK_LOG_SAMPLING", "1") };
+    }
+    let tracing_handle = crate::tracing::init_tracing();
     let pending_startup = xai_grok_telemetry::startup::PendingStartup::new();
     let timer = xai_grok_telemetry::startup::begin(crate::acp::Owner::Client);
     let primary_started = std::time::Instant::now();
@@ -1063,6 +1071,7 @@ pub async fn run(
         &mut terminal,
         connection,
         pending_startup,
+        tracing_handle,
         &mut config_watcher,
         &effective_args,
         session_cwd,

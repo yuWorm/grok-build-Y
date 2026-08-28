@@ -225,6 +225,9 @@ impl AgentView {
             }
             QuestionFocus::InputMode => vec![HintItem::new(key!(Enter), "submit"), esc],
             QuestionFocus::Navigation if qv.is_feedback_trace() => vec![esc],
+            QuestionFocus::Navigation if qv.is_prompt_blocked() => {
+                vec![HintItem::new(key!(Tab), "next answer"), esc]
+            }
             QuestionFocus::Navigation => {
                 vec![
                     HintItem::new(key!(Tab), "next answer"),
@@ -872,9 +875,11 @@ impl AgentView {
             left_spans.push(Span::styled("\u{2190}/\u{2192}", hint_key));
             left_spans.push(Span::styled(" question", hint_style));
         }
-        left_spans.push(Span::styled(" \u{b7} ", hint_style));
-        left_spans.push(Span::styled("y", hint_key));
-        left_spans.push(Span::styled(" copy", hint_style));
+        if !qv.is_prompt_blocked() {
+            left_spans.push(Span::styled(" \u{b7} ", hint_style));
+            left_spans.push(Span::styled("y", hint_key));
+            left_spans.push(Span::styled(" copy", hint_style));
+        }
         left_spans
     }
     /// `area` is the screen region assigned to this agent view.
@@ -4840,10 +4845,10 @@ mod overlay_post_flush_tests {
         let post_flush = draw(&mut parent).expect("child clear propagates");
         assert!(post_flush.as_str().contains("a=d"));
         let before_emit = crate::terminal::overlay::static_image(&png(), 20, 10, 0, 0, 41).unwrap();
-        assert!(!before_emit.as_str().contains("a=t"));
+        assert!(!before_emit.as_str().contains("a=T"));
         post_flush.write_to(&mut Vec::new()).unwrap();
         let after_emit = crate::terminal::overlay::static_image(&png(), 20, 10, 0, 0, 41).unwrap();
-        assert!(after_emit.as_str().contains("a=t"));
+        assert!(after_emit.as_str().contains("a=T"));
     }
     #[test]
     fn active_modal_returns_clear_without_committing_discarded_state() {
@@ -4861,10 +4866,10 @@ mod overlay_post_flush_tests {
         let post_flush = draw(&mut agent).expect("modal clear returned");
         assert!(post_flush.as_str().contains("a=d"));
         let before_emit = crate::terminal::overlay::static_image(&png(), 20, 10, 0, 0, 42).unwrap();
-        assert!(!before_emit.as_str().contains("a=t"));
+        assert!(!before_emit.as_str().contains("a=T"));
         post_flush.write_to(&mut Vec::new()).unwrap();
         let after_emit = crate::terminal::overlay::static_image(&png(), 20, 10, 0, 0, 42).unwrap();
-        assert!(after_emit.as_str().contains("a=t"));
+        assert!(after_emit.as_str().contains("a=T"));
     }
 }
 #[cfg(test)]
