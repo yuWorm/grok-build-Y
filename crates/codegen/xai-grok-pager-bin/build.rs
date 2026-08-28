@@ -3,6 +3,7 @@ use std::process::Command;
 fn main() {
     println!("cargo:rerun-if-changed=.git/HEAD");
     println!("cargo:rerun-if-env-changed=GROK_VERSION");
+    println!("cargo:rerun-if-env-changed=GROKY_VERSION");
 
     let commit = Command::new("git")
         .args(["rev-parse", "HEAD"])
@@ -22,4 +23,6 @@ fn main() {
         "cargo:rustc-env=VERSION_WITH_COMMIT={} ({})",
         version, commit
     );
+    let groky = std::env::var("GROKY_VERSION").unwrap_or_default();
+    println!("cargo:rustc-env=GROKY_VERSION={groky}");
 }

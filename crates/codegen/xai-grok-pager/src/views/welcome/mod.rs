@@ -486,18 +486,25 @@ pub(super) fn render_version_badge(
     }
 
     let channel = xai_grok_update::channel_label();
+    let (product_label, product_ver) = if let Some(v) = xai_grok_shell::compat::product_version() {
+        ("groky  ", v)
+    } else {
+        ("Grok Build  ", xai_grok_version::VERSION)
+    };
     match &mode {
         VersionBadgeMode::Full { .. } => {
             spans.push(Span::styled(
-                "Grok Build  ",
+                product_label,
                 Style::default()
                     .fg(theme.text_primary)
                     .add_modifier(Modifier::BOLD),
             ));
-            spans.push(Span::styled(
-                format!("{}{}", xai_grok_version::VERSION, channel),
-                Style::default().fg(theme.gray),
-            ));
+            let ver_text = if xai_grok_shell::compat::product_version().is_some() {
+                product_ver.to_string()
+            } else {
+                format!("{product_ver}{channel}")
+            };
+            spans.push(Span::styled(ver_text, Style::default().fg(theme.gray)));
         }
         VersionBadgeMode::HeroFooter => {
             if !channel.is_empty() {
@@ -509,15 +516,12 @@ pub(super) fn render_version_badge(
         }
         VersionBadgeMode::HeroInline => {
             spans.push(Span::styled(
-                "Grok Build  ",
+                product_label,
                 Style::default()
                     .fg(theme.text_primary)
                     .add_modifier(Modifier::BOLD),
             ));
-            spans.push(Span::styled(
-                xai_grok_version::VERSION,
-                Style::default().fg(theme.gray),
-            ));
+            spans.push(Span::styled(product_ver, Style::default().fg(theme.gray)));
         }
     }
 

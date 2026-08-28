@@ -1151,14 +1151,18 @@ async fn run_agent_command(
             )
         );
         if should_check_for_updates(no_auto_update) {
-            auto_update::run_update_if_available(
-                auto_update::UpdateRunMode::NonBlocking,
-                false,
-                auto_update::CliUpdateTrigger::AutoBackground,
-                update_config,
-            )
-            .await
-            .ok();
+            if xai_grok_shell::compat::skip_official_auto_update() {
+                let _ = xai_grok_shell::compat::check_background().await;
+            } else {
+                auto_update::run_update_if_available(
+                    auto_update::UpdateRunMode::NonBlocking,
+                    false,
+                    auto_update::CliUpdateTrigger::AutoBackground,
+                    update_config,
+                )
+                .await
+                .ok();
+            }
         }
     }
     let remote_settings = join_early_prefetch(early_prefetch);
@@ -1255,10 +1259,14 @@ async fn run_agent_command(
         },
         interactivity: Interactivity::Unattended,
     });
-    let managed_install = is_managed_install(
-        std::env::current_exe().ok(),
-        &xai_grok_shell::util::grok_home::grok_home(),
-    );
+    let managed_install = if xai_grok_shell::compat::skip_official_auto_update() {
+        xai_grok_shell::compat::is_groky_managed_install()
+    } else {
+        is_managed_install(
+            std::env::current_exe().ok(),
+            &xai_grok_shell::util::grok_home::grok_home(),
+        )
+    };
     if stdio_auto_update_enabled(
         is_stdio,
         use_leader,
@@ -1267,14 +1275,18 @@ async fn run_agent_command(
     ) {
         let update_config = update_config.clone();
         tokio::spawn(async move {
-            auto_update::run_update_if_available(
-                auto_update::UpdateRunMode::NonBlocking,
-                false,
-                auto_update::CliUpdateTrigger::AutoBackground,
-                &update_config,
-            )
-            .await
-            .ok();
+            if xai_grok_shell::compat::skip_official_auto_update() {
+                let _ = xai_grok_shell::compat::install_groky_update(None, false).await;
+            } else {
+                auto_update::run_update_if_available(
+                    auto_update::UpdateRunMode::NonBlocking,
+                    false,
+                    auto_update::CliUpdateTrigger::AutoBackground,
+                    &update_config,
+                )
+                .await
+                .ok();
+            }
         });
     } else if is_stdio && !use_leader && !managed_install {
         tracing::debug!("stdio auto-update skipped: not the managed install");
@@ -1502,6 +1514,24 @@ async fn run_agent_command(
                             let current_config = xai_grok_shell::util::config::load_config().await;
                             if current_config.cli.auto_update == Some(false) {
                                 return false;
+                            }
+                            if xai_grok_shell::compat::skip_official_auto_update() {
+                                return match xai_grok_shell::compat::ensure_latest_on_disk().await {
+                                    Ok((installed, relaunch_needed)) => {
+                                        if let Some(v) = installed {
+                                            tracing::info!(
+                                                "Leader auto-update: groky v{v} installed"
+                                            );
+                                        }
+                                        relaunch_needed
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            "Leader auto-update: groky check/download failed: {e}"
+                                        );
+                                        false
+                                    }
+                                };
                             }
                             match auto_update::ensure_latest_on_disk(&uc).await {
                                 Ok(outcome) => {
@@ -1843,13 +1873,20 @@ fn install_heap_profile_hooks() {
     });
 }
 fn version_text(channel_label: &str) -> String {
-    format!(
-        "grok {}\n",
-        xai_grok_version::display_version_with_commit(
-            xai_grok_version::full_version(),
-            channel_label,
-        )
-    )
+    let grok = xai_grok_version::display_version_with_commit(
+        xai_grok_version::full_version(),
+        channel_label,
+    );
+    if let Some(v) = xai_grok_shell::compat::product_version() {
+        let commit = env!("VERSION_WITH_COMMIT")
+            .rsplit('(')
+            .next()
+            .unwrap_or("unknown")
+            .trim()
+            .trim_end_matches(')');
+        return format!("groky {v} ({commit})\nbased on grok-build {grok}\n");
+    }
+    format!("grok {grok}\n")
 }
 fn write_version(writer: &mut impl std::io::Write, channel_label: &str) -> std::io::Result<()> {
     writer.write_all(version_text(channel_label).as_bytes())
@@ -1879,6 +1916,7 @@ fn dispatch_doctor_if_requested(args: &PagerArgs) -> bool {
 }
 fn main() {
     xai_grok_version::set_full_version(env!("VERSION_WITH_COMMIT"));
+    xai_grok_shell::compat::set_product_version(env!("GROKY_VERSION"));
     xai_grok_telemetry::startup::mark_process_start();
     if let Some(code) = xai_grok_pager::app::mermaid_worker::maybe_run_render_subprocess() {
         std::process::exit(code);
@@ -2043,10 +2081,18 @@ async fn async_main(args: PagerArgs) -> Result<()> {
         match command {
             Command::Version { json } => {
                 if json {
-                    let payload = serde_json::json!({
-                        "currentVersion": env!("VERSION_WITH_COMMIT"),
-                        "channel": xai_grok_update::channel_name().unwrap_or("unknown"),
-                    });
+                    let payload = if let Some(v) = xai_grok_shell::compat::product_version() {
+                        serde_json::json!({
+                            "product": "groky",
+                            "currentVersion": v,
+                            "grokBuild": env!("VERSION_WITH_COMMIT"),
+                        })
+                    } else {
+                        serde_json::json!({
+                            "currentVersion": env!("VERSION_WITH_COMMIT"),
+                            "channel": xai_grok_update::channel_name().unwrap_or("unknown"),
+                        })
+                    };
                     println!("{}", serde_json::to_string(&payload)?);
                 } else {
                     write_version(
@@ -2174,6 +2220,10 @@ async fn async_main(args: PagerArgs) -> Result<()> {
                 let _otel_guard = xai_grok_telemetry::otel_layer::otel_guard();
                 let channel_switch = get_channel_switch(alpha, stable, enterprise);
                 let trigger = resolve_update_trigger(trigger.as_deref(), auto);
+                if xai_grok_shell::compat::skip_official_auto_update() {
+                    let _ = (channel_switch, trigger);
+                    return run_groky_update_command(check, json, force_reinstall, version).await;
+                }
                 return run_update_command(
                     check,
                     json,
@@ -2295,11 +2345,25 @@ async fn async_main(args: PagerArgs) -> Result<()> {
             let wait_slot = bg_update_wait.clone();
             let (tx, rx) = tokio::sync::oneshot::channel();
             tokio::spawn(async move {
-                let check = auto_update::check_update_background(&update_config).await;
-                if let Some(mut child) = check.download {
-                    *wait_slot.lock().await = Some(tokio::spawn(async move { child.wait().await }));
+                if xai_grok_shell::compat::skip_official_auto_update() {
+                    let check = xai_grok_shell::compat::check_background().await;
+                    if let Some(mut child) = check.download {
+                        *wait_slot.lock().await =
+                            Some(tokio::spawn(async move { child.wait().await }));
+                    }
+                    let _ = tx.send(
+                        check
+                            .latest_version
+                            .map(|latest_version| auto_update::UpdateAvailable { latest_version }),
+                    );
+                } else {
+                    let check = auto_update::check_update_background(&update_config).await;
+                    if let Some(mut child) = check.download {
+                        *wait_slot.lock().await =
+                            Some(tokio::spawn(async move { child.wait().await }));
+                    }
+                    let _ = tx.send(check.update);
                 }
-                let _ = tx.send(check.update);
             });
             Some(rx)
         } else {
@@ -2311,9 +2375,19 @@ async fn async_main(args: PagerArgs) -> Result<()> {
         Ok(true) => {
             let adopted = bg_update_wait.lock().await.take();
             if finish_update_on_exit(adopted, &update_config).await {
-                eprintln!("Update installed. Run `grok` to start.");
+                let cmd = if xai_grok_shell::compat::skip_official_auto_update() {
+                    "groky"
+                } else {
+                    "grok"
+                };
+                eprintln!("Update installed. Run `{cmd}` to start.");
             } else {
-                eprintln!("Update did not complete. Run `grok update` to retry.");
+                let retry = if xai_grok_shell::compat::skip_official_auto_update() {
+                    "groky update"
+                } else {
+                    "grok update"
+                };
+                eprintln!("Update did not complete. Run `{retry}` to retry.");
             }
             Ok(())
         }
@@ -2338,14 +2412,20 @@ async fn finish_update_on_exit(
         if let Some(reason) = reason {
             eprintln!("{reason}");
         }
-        auto_update::run_update_if_available(
-            auto_update::UpdateRunMode::Blocking,
-            false,
-            auto_update::CliUpdateTrigger::UserCommand,
-            update_config,
-        )
-        .await
-        .is_ok()
+        if xai_grok_shell::compat::skip_official_auto_update() {
+            xai_grok_shell::compat::install_groky_update(None, false)
+                .await
+                .is_ok()
+        } else {
+            auto_update::run_update_if_available(
+                auto_update::UpdateRunMode::Blocking,
+                false,
+                auto_update::CliUpdateTrigger::UserCommand,
+                update_config,
+            )
+            .await
+            .is_ok()
+        }
     };
     match adopted {
         Some(handle) => {
@@ -2404,9 +2484,9 @@ fn should_check_for_updates(no_auto_update_flag: bool) -> bool {
     if no_auto_update_flag {
         return false;
     }
-    // GROK_COMPAT_HOOK: groky does not use x.ai/cli auto-update.
+    // GROK_COMPAT_HOOK: skip x.ai/cli; groky checks GitHub Releases instead.
     if xai_grok_shell::compat::skip_official_auto_update() {
-        return false;
+        return xai_grok_shell::compat::groky_updates_allowed();
     }
     !std::env::var_os("GROK_DISABLE_AUTOUPDATER")
         .is_some_and(|v| env_flag_enabled(&v.to_string_lossy()))
@@ -2468,6 +2548,55 @@ fn resolve_update_trigger(flag: Option<&str>, auto: bool) -> auto_update::CliUpd
         auto_update::CliUpdateTrigger::UserCommand
     }
 }
+async fn run_groky_update_command(
+    check: bool,
+    json: bool,
+    force_reinstall: bool,
+    version: Option<String>,
+) -> Result<()> {
+    if json && !check {
+        anyhow::bail!("--json requires --check");
+    }
+    if check {
+        if version.is_some() {
+            anyhow::bail!("--version cannot be used with --check");
+        }
+        let status = xai_grok_shell::compat::check_status()
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        if json {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "product": "groky",
+                    "currentVersion": status.current_version,
+                    "latestVersion": status.latest_version,
+                    "updateAvailable": status.update_available,
+                })
+            );
+        } else if status.update_available {
+            println!(
+                "groky {} → {} available",
+                status.current_version, status.latest_version
+            );
+        } else {
+            println!("groky {} is up to date", status.current_version);
+        }
+        return Ok(());
+    }
+    match xai_grok_shell::compat::install_groky_update(version.as_deref(), force_reinstall).await {
+        Ok(Some(installed)) => {
+            signal_leaders_to_relaunch(&installed).await;
+            Ok(())
+        }
+        Ok(None) => Ok(()),
+        Err(e) => {
+            eprintln!("{}", xai_grok_shell::compat::install_hint());
+            Err(anyhow::anyhow!("{e}"))
+        }
+    }
+}
+
 async fn run_update_command(
     check: bool,
     json: bool,

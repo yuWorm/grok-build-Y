@@ -9,6 +9,7 @@ pub mod custom;
 pub mod oauth;
 mod probe;
 pub mod reasoning;
+mod self_update;
 mod vendor_models;
 
 pub use auth_store::{VendorAuthStore, VendorCredential};
@@ -17,6 +18,12 @@ pub use catalog::{
     provider_by_id, provider_display_name, unlocked_provider_ids,
 };
 pub use probe::{VendorLoginError, login_with_api_key, logout_provider, probe_api_key};
+pub use self_update::{
+    BackgroundCheck as GrokyBackgroundCheck, UpdateStatus as GrokyUpdateStatus, check_background,
+    check_status, ensure_latest_on_disk, install as install_groky_update, install_hint,
+    is_managed_install as is_groky_managed_install, is_release_build, product_version,
+    set_product_version, updates_allowed as groky_updates_allowed,
+};
 pub use vendor_models::{
     refresh as refresh_vendor_models, refresh_unlocked as refresh_unlocked_vendor_models,
 };
@@ -105,7 +112,7 @@ pub fn skip_xai_startup_auto_login(force_login: bool) -> bool {
     !force_login
 }
 
-/// Official x.ai/cli auto-update is disabled until groky has its own channel.
+/// Official x.ai/cli auto-update stays off. Groky uses GitHub Releases.
 pub fn skip_official_auto_update() -> bool {
     true
 }

@@ -3843,6 +3843,9 @@ fn handle_welcome_input(ev: &Event, ctx: &mut WelcomeInputCtx<'_>) -> InputOutco
         if key.kind == KeyEventKind::Release {
             return InputOutcome::Unchanged;
         }
+        if ctx.has_pending_update && key!('u', CONTROL).matches(key) {
+            return InputOutcome::Action(Action::QuitForUpdate);
+        }
         if ctx.is_zdr_blocked && matches!(ctx.auth_state, AuthState::Done) {
             return handle_menu_shortcuts(
                 key,
@@ -3876,9 +3879,6 @@ fn handle_welcome_input(ev: &Event, ctx: &mut WelcomeInputCtx<'_>) -> InputOutco
             }
             if key!(F(3)).matches(key) {
                 return InputOutcome::Action(Action::FetchSessionList);
-            }
-            if ctx.has_pending_update && key!('u', CONTROL).matches(key) {
-                return InputOutcome::Action(Action::QuitForUpdate);
             }
             if ctx.has_foreign_resume && key!('u', CONTROL).matches(key) {
                 return InputOutcome::Action(Action::ResumeForeignSession);

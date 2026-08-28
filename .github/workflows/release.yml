@@ -104,7 +104,11 @@ jobs:
           echo "CXXFLAGS=-march=armv8-a" >> "$GITHUB_ENV"
 
       - name: Build groky
+        env:
+          GROKY_VERSION: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
+          version="${GROKY_VERSION#v}"
+          export GROKY_VERSION="$version"
           cargo build -p xai-grok-pager-bin --locked --release --bin groky --target ${{ matrix.rust_target }} --features release-dist
 
       - name: Package
