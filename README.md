@@ -9,7 +9,7 @@ plus ChatGPT Codex OAuth.
 
 The CLI binary is **`groky`**. It can sit next to official `grok`.
 
-Latest release: [v0.1.0](https://github.com/yuWorm/groky/releases/tag/v0.1.0)
+Latest release: [v0.1.5](https://github.com/yuWorm/groky/releases/tag/v0.1.5)
 
 ## Install
 
@@ -47,7 +47,7 @@ groky
 | Custom OpenAI-compatible endpoint | `/provider-login` → custom provider |
 | Switch model | `/model` |
 | Drop a vendor key | `/provider-logout` |
-| Refresh models.dev metadata | `/sync-models-dev` |
+| Refresh vendor model lists | `/sync-models-dev` |
 
 xAI login is unchanged (`AuthManager`, `~/.grok/auth.json`). Third-party
 keys never go in `config.toml`; they live in `~/.grok/vendor-auth.json`.

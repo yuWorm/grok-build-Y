@@ -244,10 +244,13 @@ pub(crate) fn execute(
         Effect::SyncModelsDev => {
             tasks.spawn(async move {
                 match xai_grok_shell::compat::reasoning::sync_from_models_dev().await {
-                    Ok(result) => TaskResult::ModelsDevSynced {
-                        count: result.count,
-                        error: None,
-                    },
+                    Ok(result) => {
+                        let _ = xai_grok_shell::compat::refresh_unlocked_vendor_models().await;
+                        TaskResult::ModelsDevSynced {
+                            count: result.count,
+                            error: None,
+                        }
+                    }
                     Err(error) => TaskResult::ModelsDevSynced {
                         count: 0,
                         error: Some(error.to_string()),

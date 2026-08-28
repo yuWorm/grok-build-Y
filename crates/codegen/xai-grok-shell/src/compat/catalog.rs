@@ -61,6 +61,7 @@ const OPENAI_MODELS: &[VendorModelSpec] = &[
     },
 ];
 
+/// Last-resort Claude rows when live `/v1/models` and models.dev both miss.
 const ANTHROPIC_MODELS: &[VendorModelSpec] = &[
     VendorModelSpec {
         api_model: "claude-opus-4-6",
@@ -429,16 +430,72 @@ fn extra_headers(provider: &ProviderSpec) -> indexmap::IndexMap<String, String> 
     headers
 }
 
-fn model_entry(provider: &ProviderSpec, spec: &VendorModelSpec) -> (String, ModelEntry) {
-    let key = catalog_key(provider.id, spec.api_model);
-    let mut info = ModelInfo::fallback(spec.api_model);
+struct ResolvedModel {
+    api_model: String,
+    name: String,
+    context_window: u64,
+    supports_reasoning_effort: bool,
+}
+
+fn static_models(provider: &ProviderSpec) -> Vec<ResolvedModel> {
+    provider
+        .models
+        .iter()
+        .map(|spec| ResolvedModel {
+            api_model: spec.api_model.to_owned(),
+            name: spec.name.to_owned(),
+            context_window: spec.context_window,
+            supports_reasoning_effort: spec.supports_reasoning_effort,
+        })
+        .collect()
+}
+
+#[cfg(not(test))]
+fn from_cached(models: Vec<crate::compat::vendor_models::CachedModel>) -> Vec<ResolvedModel> {
+    models
+        .into_iter()
+        .map(|model| {
+            let supports_reasoning_effort =
+                crate::compat::reasoning::model_supports(&model.api_model);
+            ResolvedModel {
+                api_model: model.api_model,
+                name: model.name,
+                context_window: model.context_window,
+                supports_reasoning_effort,
+            }
+        })
+        .collect()
+}
+
+/// Live cache, then models.dev current generation, then the hardcoded slice.
+fn resolved_models(provider: &ProviderSpec) -> Vec<ResolvedModel> {
+    #[cfg(test)]
+    {
+        return static_models(provider);
+    }
+    #[cfg(not(test))]
+    {
+        if let Some(cached) = crate::compat::vendor_models::cached_models(provider.id) {
+            return from_cached(cached);
+        }
+        let fallback = crate::compat::vendor_models::models_dev_fallback(provider.id);
+        if !fallback.is_empty() {
+            return from_cached(fallback);
+        }
+        static_models(provider)
+    }
+}
+
+fn model_entry(provider: &ProviderSpec, spec: &ResolvedModel) -> (String, ModelEntry) {
+    let key = catalog_key(provider.id, &spec.api_model);
+    let mut info = ModelInfo::fallback(&spec.api_model);
     info.id = Some(key.clone());
-    info.model = spec.api_model.to_owned();
+    info.model = spec.api_model.clone();
     info.model_family = Some(provider.id.to_owned());
     info.base_url = provider.base_url.to_owned();
     info.name = Some(crate::compat::custom::vendor_model_display_name(
         provider.name,
-        spec.name,
+        &spec.name,
     ));
     info.api_backend = provider.api_backend.clone();
     info.auth_scheme = provider.auth_scheme;
@@ -447,7 +504,7 @@ fn model_entry(provider: &ProviderSpec, spec: &VendorModelSpec) -> (String, Mode
     info.supported_in_api = true;
     info.supports_reasoning_effort = spec.supports_reasoning_effort;
     info.user_selectable = true;
-    crate::compat::reasoning::apply_to_model_info(&mut info, spec.api_model);
+    crate::compat::reasoning::apply_to_model_info(&mut info, &spec.api_model);
     let entry = ModelEntry {
         info,
         api_key: None,
@@ -465,8 +522,8 @@ pub fn merge_vendor_catalog(resolved: &mut IndexMap<String, ModelEntry>) {
         if !provider_unlocked(provider) {
             continue;
         }
-        for spec in provider.models {
-            let (key, entry) = model_entry(provider, spec);
+        for spec in resolved_models(provider) {
+            let (key, entry) = model_entry(provider, &spec);
             if !resolved.contains_key(&key) {
                 resolved.insert(key, entry);
             }
@@ -483,11 +540,23 @@ pub fn acp_models_for_provider(
         return crate::compat::custom::acp_models_for_custom(provider_id);
     };
     let mut entries = IndexMap::new();
-    for spec in provider.models {
-        let (key, entry) = model_entry(provider, spec);
+    for spec in resolved_models(provider) {
+        let (key, entry) = model_entry(provider, &spec);
         entries.insert(key, entry);
     }
     crate::agent::config::to_acp_model_info(&entries)
+}
+
+pub(crate) fn provider_is_unlocked(id: &str) -> bool {
+    provider_by_id(id).is_some_and(provider_unlocked)
+}
+
+pub fn unlocked_provider_ids() -> Vec<String> {
+    PROVIDERS
+        .iter()
+        .filter(|provider| provider_unlocked(provider))
+        .map(|provider| provider.id.to_owned())
+        .collect()
 }
 
 #[cfg(test)]

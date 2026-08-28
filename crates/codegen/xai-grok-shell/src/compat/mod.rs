@@ -9,13 +9,17 @@ pub mod custom;
 pub mod oauth;
 mod probe;
 pub mod reasoning;
+mod vendor_models;
 
 pub use auth_store::{VendorAuthStore, VendorCredential};
 pub use catalog::{
     ProviderSpec, acp_models_for_provider, arg_items, builtin_providers, merge_vendor_catalog,
-    provider_by_id, provider_display_name,
+    provider_by_id, provider_display_name, unlocked_provider_ids,
 };
 pub use probe::{VendorLoginError, login_with_api_key, logout_provider, probe_api_key};
+pub use vendor_models::{
+    refresh as refresh_vendor_models, refresh_unlocked as refresh_unlocked_vendor_models,
+};
 
 use crate::agent::config::ModelEntry;
 use xai_grok_sampler::AuthScheme;

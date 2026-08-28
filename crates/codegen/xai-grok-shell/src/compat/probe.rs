@@ -83,6 +83,13 @@ pub async fn login_with_api_key(provider_id: &str, api_key: &str) -> Result<(), 
     } else {
         store.mark_connected(provider_id)?;
     }
+    if let Err(error) = crate::compat::vendor_models::refresh(provider_id).await {
+        tracing::warn!(
+            provider_id,
+            error = %error,
+            "vendor model list refresh failed after login"
+        );
+    }
     Ok(())
 }
 

@@ -161,6 +161,26 @@ fn lookup_entry(api_model: &str) -> Option<SnapshotEntry> {
     snapshot().get(&key).cloned()
 }
 
+/// Overlay ∪ baked snapshot ids (normalized), for vendor fallback lists.
+pub fn catalog_ids() -> Vec<String> {
+    let mut ids: HashSet<String> = snapshot().keys().cloned().collect();
+    #[cfg(test)]
+    {
+        if let Some(map) = test_overlay().read().as_ref() {
+            ids.extend(map.keys().cloned());
+        }
+        return ids.into_iter().collect();
+    }
+    #[cfg(not(test))]
+    {
+        refresh_overlay_from_disk();
+        if let Some(entries) = overlay_state().read().entries.as_ref() {
+            ids.extend(entries.keys().cloned());
+        }
+        ids.into_iter().collect()
+    }
+}
+
 pub fn lookup_meta(api_model: &str) -> Option<CatalogMeta> {
     let entry = lookup_entry(api_model)?;
     let reasoning = menu_from_entry(&entry);

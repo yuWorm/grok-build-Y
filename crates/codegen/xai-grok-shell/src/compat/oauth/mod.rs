@@ -48,12 +48,22 @@ pub async fn begin(provider_id: &str) -> Result<OAuthPending, VendorLoginError> 
 }
 
 pub async fn wait_completion(provider_id: &str) -> Result<(), VendorLoginError> {
-    match provider_id {
+    let result = match provider_id {
         "openrouter" => openrouter::wait_completion(provider_id).await,
         "openai-codex" => openai_codex::wait_completion(provider_id).await,
         "anthropic-claude" => anthropic_claude::wait_completion(provider_id).await,
         other => Err(VendorLoginError::UnknownProvider(other.to_owned())),
+    };
+    if result.is_ok()
+        && let Err(error) = crate::compat::vendor_models::refresh(provider_id).await
+    {
+        tracing::warn!(
+            provider_id,
+            error = %error,
+            "vendor model list refresh failed after OAuth"
+        );
     }
+    result
 }
 
 pub fn submit_manual(provider_id: &str, input: &str) -> Result<(), VendorLoginError> {

@@ -279,6 +279,16 @@ pub async fn fetch_model_list(
     auth_scheme: AuthScheme,
     anthropic_version: Option<&str>,
 ) -> Result<Vec<RemoteModel>, VendorLoginError> {
+    fetch_model_list_with_headers(base_url, api_key, auth_scheme, anthropic_version, &[]).await
+}
+
+pub async fn fetch_model_list_with_headers(
+    base_url: &str,
+    api_key: &str,
+    auth_scheme: AuthScheme,
+    anthropic_version: Option<&str>,
+    extra_headers: &[(String, String)],
+) -> Result<Vec<RemoteModel>, VendorLoginError> {
     let urls = models_endpoint_candidates(base_url);
     if urls.is_empty() {
         return Err(VendorLoginError::Probe("base URL is required".into()));
@@ -302,6 +312,13 @@ pub async fn fetch_model_list(
         }
         if let Some(version) = anthropic_version {
             req = req.header("anthropic-version", version);
+        }
+        for (name, value) in extra_headers {
+            if name.eq_ignore_ascii_case("authorization") || name.eq_ignore_ascii_case("x-api-key")
+            {
+                continue;
+            }
+            req = req.header(name.as_str(), value.as_str());
         }
         let resp = match req.send().await {
             Ok(resp) => resp,

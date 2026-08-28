@@ -248,7 +248,7 @@ pub(super) fn dispatch_vendor_logout(app: &mut AppView, provider_id: String) -> 
 }
 
 pub(super) fn dispatch_sync_models_dev(app: &mut AppView) -> Vec<Effect> {
-    app.show_toast("Syncing model metadata from models.dev…");
+    app.show_toast("Syncing model catalog…");
     vec![Effect::SyncModelsDev]
 }
 
@@ -261,12 +261,32 @@ pub(super) fn handle_models_dev_synced(
         app.show_toast(&format!("models.dev sync failed: {err}"));
         return vec![];
     }
+    for provider_id in xai_grok_shell::compat::unlocked_provider_ids() {
+        inject_provider_models(app, &provider_id);
+    }
     patch_model_state_reasoning(&mut app.models);
     for agent in app.agents.values_mut() {
         patch_model_state_reasoning(&mut agent.session.models);
     }
     app.show_toast(&format!("Synced {count} models from models.dev"));
     vec![]
+}
+
+fn inject_provider_models(app: &mut AppView, provider_id: &str) {
+    let extras = xai_grok_shell::compat::acp_models_for_provider(provider_id);
+    let prefix = format!("{provider_id}/");
+    app.models
+        .available
+        .retain(|id, _| !id.0.starts_with(&prefix));
+    app.models.available.extend(extras.clone());
+    for agent in app.agents.values_mut() {
+        agent
+            .session
+            .models
+            .available
+            .retain(|id, _| !id.0.starts_with(&prefix));
+        agent.session.models.available.extend(extras.clone());
+    }
 }
 
 fn patch_model_state_reasoning(models: &mut ModelState) {
@@ -325,19 +345,8 @@ pub(super) fn handle_vendor_login_complete(
         return vec![];
     }
 
-    let extras = xai_grok_shell::compat::acp_models_for_provider(&provider_id);
-    let prefix = format!("{provider_id}/");
-    app.models
-        .available
-        .retain(|id, _| !id.0.starts_with(&prefix));
-    app.models.available.extend(extras.clone());
+    inject_provider_models(app, &provider_id);
     for agent in app.agents.values_mut() {
-        agent
-            .session
-            .models
-            .available
-            .retain(|id, _| !id.0.starts_with(&prefix));
-        agent.session.models.available.extend(extras.clone());
         agent.vendor_login = None;
     }
     app.welcome_vendor_login = None;

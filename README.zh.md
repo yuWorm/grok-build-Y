@@ -8,7 +8,7 @@ agent、tools、MCP、ACP、TUI 与官方同一套，额外支持第三方模型
 
 命令行二进制是 **`groky`**，可以和官方 `grok` 并存。
 
-最新版本：[v0.1.0](https://github.com/yuWorm/groky/releases/tag/v0.1.0)
+最新版本：[v0.1.5](https://github.com/yuWorm/groky/releases/tag/v0.1.5)
 
 ## 安装
 
@@ -45,7 +45,7 @@ groky
 | 自定义 OpenAI 兼容端点 | `/provider-login` → 自定义供应商 |
 | 切换模型 | `/model` |
 | 去掉供应商密钥 | `/provider-logout` |
-| 刷新 models.dev 元数据 | `/sync-models-dev` |
+| 刷新供应商模型列表 | `/sync-models-dev` |
 
 xAI 登录未改（`AuthManager`、`~/.grok/auth.json`）。第三方密钥不进
 `config.toml`，而在 `~/.grok/vendor-auth.json`。供应商 401 会提示

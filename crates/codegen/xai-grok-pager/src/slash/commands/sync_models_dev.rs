@@ -1,4 +1,4 @@
-//! `/sync-models-dev` — fetch models.dev metadata into `~/.grok`.
+//! `/sync-models-dev` — refresh vendor model lists and models.dev metadata.
 
 use crate::app::actions::Action;
 use crate::slash::command::{CommandExecCtx, CommandResult, SlashCommand};
@@ -15,7 +15,7 @@ impl SlashCommand for SyncModelsDevCommand {
     }
 
     fn description(&self) -> &str {
-        "Refresh reasoning menus and context windows from models.dev"
+        "Refresh vendor model lists, reasoning menus, and context windows"
     }
 
     fn usage(&self) -> &str {
