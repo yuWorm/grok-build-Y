@@ -275,6 +275,7 @@ pub(crate) fn test_app() -> AppView {
         relaunch: None,
         has_claude_import: false,
         import_claude_modal: None,
+        welcome_vendor_login: None,
         welcome_doc_viewer: None,
         screen_mode: ScreenMode::Inline,
         pending_screen_mode_switch: None,
@@ -4014,6 +4015,17 @@ fn welcome_pending_n_is_unchanged() {
     app.welcome_prompt_focused = false;
     let outcome = app.handle_input(&key_event(KeyCode::Char('n'), KeyModifiers::NONE));
     assert!(matches!(outcome, InputOutcome::Unchanged));
+}
+#[test]
+fn welcome_pending_p_opens_provider_login() {
+    let mut app = test_app();
+    app.auth_state = AuthState::Pending { error: None };
+    app.welcome_prompt_focused = false;
+    let outcome = app.handle_input(&key_event(KeyCode::Char('p'), KeyModifiers::NONE));
+    assert!(matches!(
+        outcome,
+        InputOutcome::Action(Action::OpenVendorLogin { provider_id: None })
+    ));
 }
 #[test]
 fn welcome_done_n_starts_session() {

@@ -1240,6 +1240,8 @@ pub struct AppView {
     pub has_claude_import: bool,
     /// When set, the welcome screen renders an interactive import modal instead of normal content.
     pub import_claude_modal: Option<crate::views::import_claude_modal::ImportClaudeModalState>,
+    /// Provider login modal on Welcome (no session yet).
+    pub(crate) welcome_vendor_login: Option<crate::views::vendor_login_modal::VendorLoginState>,
     /// Doc viewer overlay for the welcome screen (release notes via Ctrl+L).
     pub welcome_doc_viewer: Option<crate::views::modal::ActiveModal>,
     /// Whether the pager uses fullscreen (alt-screen) or inline mode.
@@ -1715,6 +1717,7 @@ impl AppView {
             relaunch: None,
             has_claude_import: false,
             import_claude_modal: None,
+            welcome_vendor_login: None,
             welcome_doc_viewer: None,
             screen_mode: ScreenMode::Inline,
             pending_screen_mode_switch: None,
@@ -2629,6 +2632,9 @@ impl AppView {
         );
         #[cfg(feature = "local-workspace")]
         let session_picker_open = self.session_picker_entries.is_some() || sp_loading;
+        if matches!(self.active_view, ActiveView::Welcome) && self.welcome_vendor_login.is_some() {
+            return crate::app::dispatch::vendor::handle_welcome_vendor_login_input(self, ev);
+        }
         let outcome = match self.active_view {
             ActiveView::Welcome => handle_welcome_input(
                 ev,
@@ -3951,6 +3957,9 @@ fn handle_welcome_input(ev: &Event, ctx: &mut WelcomeInputCtx<'_>) -> InputOutco
                 if key!('l').matches(key) || key!(Enter).matches(key) {
                     return InputOutcome::Action(Action::Login);
                 }
+                if key!('p').matches(key) {
+                    return InputOutcome::Action(Action::OpenVendorLogin { provider_id: None });
+                }
             }
             AuthState::Authenticating { .. } if *ctx.show_raw_url => {
                 if key!('q', CONTROL).matches(key) || key!('c', CONTROL).matches(key) {
@@ -4290,7 +4299,8 @@ fn handle_menu_nav(
 fn dispatch_pending_menu_action(index: usize) -> InputOutcome {
     match index {
         0 => InputOutcome::Action(Action::Login),
-        1 => InputOutcome::Action(Action::Quit),
+        1 => InputOutcome::Action(Action::OpenVendorLogin { provider_id: None }),
+        2 => InputOutcome::Action(Action::Quit),
         _ => InputOutcome::Unchanged,
     }
 }
@@ -4813,6 +4823,14 @@ impl AppView {
                                 compact,
                             );
                         }
+                        if let Some(ref mut modal_state) = self.welcome_vendor_login {
+                            crate::views::vendor_login_modal::render_vendor_login_modal(
+                                f.buffer_mut(),
+                                view_area,
+                                modal_state,
+                                compact,
+                            );
+                        }
                         if let Some(dialog) = self.new_worktree_dialog.as_ref() {
                             crate::views::new_worktree_dialog::render_new_worktree_dialog(
                                 view_area,
@@ -5323,6 +5341,7 @@ impl AppView {
         let cloud_modal_open = false;
         matches!(self.active_view, ActiveView::Agent(id) if self.agents.get(&id).is_some_and(|a| a.extensions_modal.is_some() || a.active_modal.is_some()))
             || self.import_claude_modal.is_some()
+            || self.welcome_vendor_login.is_some()
             || self.new_worktree_dialog.is_some()
             || self.welcome_doc_viewer.is_some()
             || self.tutorial.is_some()

@@ -354,7 +354,7 @@ impl acp::Agent for MvpAgent {
             Some(crate::auth::PreferredAuthMethod::ApiKey) => false,
             _ => has_cached_token,
         };
-        let built = auth_method::build_auth_methods(auth_method::AuthMethodsBuildInputs {
+        let mut built = auth_method::build_auth_methods(auth_method::AuthMethodsBuildInputs {
             has_external_api_key,
             has_cached_token,
             has_enterprise_oidc,
@@ -363,6 +363,8 @@ impl acp::Agent for MvpAgent {
             has_auth_provider_command: has_auth_provider,
             preferred_method,
         });
+        // GROK_COMPAT_HOOK: vendor-auth.json can satisfy session create.
+        crate::compat::apply_vendor_auth_method(&mut built);
         let auth_methods = built.methods;
         xai_grok_telemetry::unified_log::info(
             "auth: initialize() built auth_methods for ACP response",
@@ -526,6 +528,15 @@ impl acp::Agent for MvpAgent {
             None,
             Some(serde_json::json!({"method": arguments.method_id.0.as_ref()})),
         );
+        if arguments.method_id.0.as_ref() == crate::compat::VENDOR_AUTH_METHOD_ID {
+            if !crate::compat::has_any_configured_provider() {
+                return Err(acp::Error::auth_required()
+                    .data("Configure a provider with /provider-login"));
+            }
+            self.set_auth_method(arguments.method_id.clone());
+            emit_login_span(true, "vendor", None, None);
+            return Ok(Default::default());
+        }
         if let Some(preferred) = self.cfg.borrow().grok_com_config.preferred_method {
             let kind = auth_method::AuthMethodKind::from_id(&arguments.method_id);
             let allowed = match preferred {

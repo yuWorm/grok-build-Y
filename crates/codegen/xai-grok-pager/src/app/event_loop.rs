@@ -1333,12 +1333,13 @@ pub(crate) async fn run(
             };
             vec![]
         } else if xai_grok_shell::compat::skip_xai_startup_auto_login(force_login) {
-            // GROK_COMPAT_HOOK: stay on Welcome; do not open grok.com.
-            // `/login` and `groky login` still start the xAI flow.
+            // GROK_COMPAT_HOOK: login splash without auto-opening grok.com.
+            // User picks grok.com (l) or a vendor (p) before sessions start.
             tracing::info!(
                 method_id = ?app.login_method_id,
-                "skipping grok.com auto-login at startup"
+                "showing provider gate; skipping grok.com auto-login"
             );
+            app.auth_state = super::app_view::AuthState::Pending { error: None };
             vec![]
         } else {
             dispatch::dispatch(Action::Login, &mut app)

@@ -167,6 +167,24 @@ impl VendorAuthStore {
         self.data.providers.contains_key(provider_id)
     }
 
+    /// Any configured vendor slot that can actually be used.
+    pub fn has_any_configured_provider(&self) -> bool {
+        self.data
+            .providers
+            .values()
+            .any(|cred| match cred.kind.as_str() {
+                "connected" => true,
+                "oauth" => {
+                    cred.request_secret().is_some()
+                        || cred
+                            .refresh
+                            .as_deref()
+                            .is_some_and(|s| !s.trim().is_empty())
+                }
+                _ => cred.request_secret().is_some(),
+            })
+    }
+
     pub fn set_api_key(&mut self, provider_id: &str, key: String) -> io::Result<()> {
         self.data
             .providers
@@ -281,7 +299,16 @@ mod tests {
         let store = VendorAuthStore::load_from(path).unwrap();
         assert!(store.has_provider("ollama"));
         assert!(store.api_key("ollama").is_none());
+        assert!(store.has_any_configured_provider());
         let _ = VendorCredential::connected_slot();
+    }
+
+    #[test]
+    fn empty_store_has_no_configured_provider() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vendor-auth.json");
+        let store = VendorAuthStore::load_from(path).unwrap();
+        assert!(!store.has_any_configured_provider());
     }
 
     #[test]

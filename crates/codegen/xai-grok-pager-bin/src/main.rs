@@ -2404,6 +2404,10 @@ fn should_check_for_updates(no_auto_update_flag: bool) -> bool {
     if no_auto_update_flag {
         return false;
     }
+    // GROK_COMPAT_HOOK: groky does not use x.ai/cli auto-update.
+    if xai_grok_shell::compat::skip_official_auto_update() {
+        return false;
+    }
     !std::env::var_os("GROK_DISABLE_AUTOUPDATER")
         .is_some_and(|v| env_flag_enabled(&v.to_string_lossy()))
 }

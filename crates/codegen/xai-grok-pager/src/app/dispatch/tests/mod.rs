@@ -265,6 +265,7 @@ fn test_app() -> AppView {
         quit_for_update: false,
         relaunch: None,
         import_claude_modal: None,
+        welcome_vendor_login: None,
         welcome_doc_viewer: None,
         screen_mode: crate::app::ScreenMode::Inline,
         pending_screen_mode_switch: None,

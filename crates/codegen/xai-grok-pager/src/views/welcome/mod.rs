@@ -734,8 +734,16 @@ pub fn render_welcome(
         AuthState::Pending { error } => {
             let label = params.login_label.unwrap_or("grok.com");
             let login_text = format!("Login with {}", label);
-            let menu = [("l", login_text.as_str()), ("q", "Quit")];
-            let msg = error.as_deref().map(|e| (e, theme.accent_error));
+            let menu = [
+                ("l", login_text.as_str()),
+                ("p", "Add a provider"),
+                ("q", "Quit"),
+            ];
+            let hint = "Configure a provider to continue.";
+            let msg = error
+                .as_deref()
+                .map(|e| (e, theme.accent_error))
+                .or(Some((hint, theme.gray_bright)));
             let info = PromptInfo {
                 model_name: params.model_name,
                 flags: params.flags,

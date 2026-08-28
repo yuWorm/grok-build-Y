@@ -1,14 +1,99 @@
 //! Third-party provider login / logout (GROK_COMPAT). Does not use xAI `/login`.
 
-use super::ctx::{get_active_agent_mut, with_active_agent};
+use super::ctx::get_active_agent_mut;
 use crate::acp::model_state::ModelState;
-use crate::app::actions::Effect;
-use crate::app::app_view::AppView;
-use crate::views::vendor_login_modal::VendorLoginState;
+use crate::app::actions::{Action, Effect};
+use crate::app::app_view::{AppView, InputOutcome};
+use crate::views::vendor_login_modal::{VendorLoginOutcome, VendorLoginState};
+use agent_client_protocol as acp;
 use xai_grok_shell::sampling::types::{
     REASONING_EFFORT_META_KEY, REASONING_EFFORTS_META_KEY, SUPPORTS_REASONING_EFFORT_META_KEY,
     parse_reasoning_effort_meta, reasoning_effort_meta_value, reasoning_efforts_meta_value,
 };
+
+fn vendor_login_mut(app: &mut AppView) -> Option<&mut VendorLoginState> {
+    let on_agent = get_active_agent_mut(app).is_some_and(|agent| agent.vendor_login.is_some());
+    if on_agent {
+        return get_active_agent_mut(app).and_then(|agent| agent.vendor_login.as_mut());
+    }
+    app.welcome_vendor_login.as_mut()
+}
+
+fn map_vendor_login_outcome(outcome: VendorLoginOutcome) -> InputOutcome {
+    match outcome {
+        VendorLoginOutcome::Unchanged => InputOutcome::Unchanged,
+        VendorLoginOutcome::Changed => InputOutcome::Changed,
+        VendorLoginOutcome::Close => InputOutcome::Action(Action::CloseVendorLogin),
+        VendorLoginOutcome::Submit { provider_id, key } => {
+            InputOutcome::Action(Action::SubmitVendorKey { provider_id, key })
+        }
+        VendorLoginOutcome::StartOAuth { provider_id } => {
+            InputOutcome::Action(Action::StartVendorOAuth { provider_id })
+        }
+        VendorLoginOutcome::SubmitOAuthCode { provider_id, code } => {
+            InputOutcome::Action(Action::SubmitVendorOAuthCode { provider_id, code })
+        }
+        VendorLoginOutcome::SyncCustom {
+            name,
+            base_url,
+            api_backend,
+            auth_scheme,
+            key,
+        } => InputOutcome::Action(Action::SyncVendorCustom {
+            name,
+            base_url,
+            api_backend,
+            auth_scheme,
+            key,
+        }),
+        VendorLoginOutcome::SaveCustom {
+            provider_id,
+            name,
+            base_url,
+            api_backend,
+            auth_scheme,
+            key,
+            models,
+        } => InputOutcome::Action(Action::SaveVendorCustom {
+            provider_id,
+            name,
+            base_url,
+            api_backend,
+            auth_scheme,
+            key,
+            models,
+        }),
+    }
+}
+
+pub(crate) fn handle_welcome_vendor_login_input(
+    app: &mut AppView,
+    ev: &crossterm::event::Event,
+) -> InputOutcome {
+    let Some(state) = app.welcome_vendor_login.as_mut() else {
+        return InputOutcome::Unchanged;
+    };
+    match ev {
+        crossterm::event::Event::Key(key) => map_vendor_login_outcome(
+            crate::views::vendor_login_modal::handle_vendor_login_key(state, key),
+        ),
+        crossterm::event::Event::Mouse(mouse) => {
+            map_vendor_login_outcome(crate::views::vendor_login_modal::handle_vendor_login_mouse(
+                state,
+                mouse.kind,
+                mouse.column,
+                mouse.row,
+            ))
+        }
+        crossterm::event::Event::Paste(text) => {
+            match crate::views::vendor_login_modal::handle_vendor_login_paste(state, text) {
+                VendorLoginOutcome::Changed => InputOutcome::Changed,
+                other => map_vendor_login_outcome(other),
+            }
+        }
+        _ => InputOutcome::Unchanged,
+    }
+}
 
 pub(super) fn dispatch_open_vendor_login(
     app: &mut AppView,
@@ -30,35 +115,30 @@ pub(super) fn dispatch_open_vendor_login(
         }
         None => VendorLoginState::picker(),
     };
-    let Some(agent) = get_active_agent_mut(app) else {
-        app.show_toast("Open a session, then run /provider-login");
-        return vec![];
-    };
-    agent.vendor_login = Some(state);
+    if let Some(agent) = get_active_agent_mut(app) {
+        agent.vendor_login = Some(state);
+    } else {
+        app.welcome_vendor_login = Some(state);
+    }
     vec![]
 }
 
 pub(super) fn dispatch_close_vendor_login(app: &mut AppView) -> Vec<Effect> {
-    with_active_agent(app, |agent| {
-        if let Some(id) = agent
-            .vendor_login
-            .as_ref()
-            .and_then(|s| s.oauth_provider_id().map(str::to_owned))
-        {
-            xai_grok_shell::compat::oauth::cancel(&id);
-        }
+    if let Some(id) = vendor_login_mut(app).and_then(|s| s.oauth_provider_id().map(str::to_owned)) {
+        xai_grok_shell::compat::oauth::cancel(&id);
+    }
+    if let Some(agent) = get_active_agent_mut(app) {
         agent.vendor_login = None;
-    });
+    }
+    app.welcome_vendor_login = None;
     vec![]
 }
 
 pub(super) fn dispatch_start_vendor_oauth(app: &mut AppView, provider_id: String) -> Vec<Effect> {
-    with_active_agent(app, |agent| {
-        if let Some(state) = agent.vendor_login.as_mut() {
-            state.probing = true;
-            state.error = None;
-        }
-    });
+    if let Some(state) = vendor_login_mut(app) {
+        state.probing = true;
+        state.error = None;
+    }
     vec![Effect::VendorOAuthStart { provider_id }]
 }
 
@@ -68,9 +148,7 @@ pub(super) fn dispatch_submit_vendor_oauth_code(
     code: String,
 ) -> Vec<Effect> {
     if let Err(error) = xai_grok_shell::compat::oauth::submit_manual(&provider_id, &code) {
-        if let Some(agent) = get_active_agent_mut(app)
-            && let Some(state) = agent.vendor_login.as_mut()
-        {
+        if let Some(state) = vendor_login_mut(app) {
             state.probing = false;
             state.error = Some(error.to_string());
         } else {
@@ -78,12 +156,10 @@ pub(super) fn dispatch_submit_vendor_oauth_code(
         }
         return vec![];
     }
-    with_active_agent(app, |agent| {
-        if let Some(state) = agent.vendor_login.as_mut() {
-            state.probing = true;
-            state.error = None;
-        }
-    });
+    if let Some(state) = vendor_login_mut(app) {
+        state.probing = true;
+        state.error = None;
+    }
     vec![]
 }
 
@@ -94,12 +170,10 @@ pub(super) fn dispatch_sync_vendor_custom(
     auth_scheme: String,
     key: String,
 ) -> Vec<Effect> {
-    with_active_agent(app, |agent| {
-        if let Some(state) = agent.vendor_login.as_mut() {
-            state.probing = true;
-            state.error = None;
-        }
-    });
+    if let Some(state) = vendor_login_mut(app) {
+        state.probing = true;
+        state.error = None;
+    }
     vec![Effect::VendorCustomSync {
         base_url,
         api_backend,
@@ -118,12 +192,10 @@ pub(super) fn dispatch_save_vendor_custom(
     key: String,
     models: Vec<(String, String, u64, bool)>,
 ) -> Vec<Effect> {
-    with_active_agent(app, |agent| {
-        if let Some(state) = agent.vendor_login.as_mut() {
-            state.probing = true;
-            state.error = None;
-        }
-    });
+    if let Some(state) = vendor_login_mut(app) {
+        state.probing = true;
+        state.error = None;
+    }
     vec![Effect::VendorCustomSave {
         provider_id,
         name,
@@ -140,9 +212,7 @@ pub(super) fn handle_vendor_custom_synced(
     models: Vec<(String, String, u64)>,
     error: Option<String>,
 ) -> Vec<Effect> {
-    if let Some(agent) = get_active_agent_mut(app)
-        && let Some(state) = agent.vendor_login.as_mut()
-    {
+    if let Some(state) = vendor_login_mut(app) {
         state.apply_custom_models(models, error);
     } else if let Some(err) = error {
         app.show_toast(&err);
@@ -156,9 +226,7 @@ pub(super) fn handle_vendor_oauth_pending(
     authorize_url: String,
     instructions: String,
 ) -> Vec<Effect> {
-    if let Some(agent) = get_active_agent_mut(app)
-        && let Some(state) = agent.vendor_login.as_mut()
-    {
+    if let Some(state) = vendor_login_mut(app) {
         state.enter_oauth_wait(authorize_url, instructions);
         return vec![Effect::VendorOAuthWait { provider_id }];
     }
@@ -244,9 +312,7 @@ pub(super) fn handle_vendor_login_complete(
 ) -> Vec<Effect> {
     if let Some(err) = error {
         let cancelled = err.to_lowercase().contains("cancel");
-        if let Some(agent) = get_active_agent_mut(app)
-            && let Some(state) = agent.vendor_login.as_mut()
-        {
+        if let Some(state) = vendor_login_mut(app) {
             state.probing = false;
             if cancelled {
                 state.back_from_oauth();
@@ -274,9 +340,23 @@ pub(super) fn handle_vendor_login_complete(
         agent.session.models.available.extend(extras.clone());
         agent.vendor_login = None;
     }
+    app.welcome_vendor_login = None;
     let name = xai_grok_shell::compat::provider_display_name(&provider_id);
     app.show_toast(&format!("Signed in to {name}. Use /model to switch."));
-    vec![]
+    let mut effects = Vec::new();
+    if !matches!(app.auth_state, crate::app::app_view::AuthState::Done) {
+        app.auth_state = crate::app::app_view::AuthState::Done;
+        app.welcome_prompt_focused = true;
+        let request_seq = app.next_auth_request_seq;
+        app.next_auth_request_seq += 1;
+        effects.push(Effect::Authenticate {
+            request_seq,
+            method_id: acp::AuthMethodId::new(xai_grok_shell::compat::VENDOR_AUTH_METHOD_ID),
+            use_oauth: false,
+            force_interactive: false,
+        });
+    }
+    effects
 }
 
 pub(super) fn handle_vendor_logout_complete(

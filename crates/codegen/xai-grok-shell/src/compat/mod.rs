@@ -101,6 +101,61 @@ pub fn skip_xai_startup_auto_login(force_login: bool) -> bool {
     !force_login
 }
 
+/// Official x.ai/cli auto-update is disabled until groky has its own channel.
+pub fn skip_official_auto_update() -> bool {
+    true
+}
+
+/// ACP method id for "a vendor credential is configured" (not grok.com).
+pub const VENDOR_AUTH_METHOD_ID: &str = "vendor";
+
+/// True when `vendor-auth.json` has at least one usable provider.
+pub fn has_any_configured_provider() -> bool {
+    VendorAuthStore::default_store()
+        .ok()
+        .is_some_and(|store| store.has_any_configured_provider())
+}
+
+/// Advertise a no-browser ACP method when a vendor is already configured so
+/// session create is not blocked on grok.com `authenticate`.
+pub fn apply_vendor_auth_method(built: &mut crate::agent::auth_method::BuiltAuthMethods) {
+    if !has_any_configured_provider() {
+        return;
+    }
+    let already = built
+        .methods
+        .iter()
+        .any(|m| m.id().0.as_ref() == VENDOR_AUTH_METHOD_ID);
+    if !already {
+        let method = vendor_auth_method();
+        let api_key_first = built.methods.first().is_some_and(|m| {
+            crate::agent::auth_method::AuthMethodKind::from_id(m.id()).is_api_key()
+        });
+        if api_key_first || built.default_auth_method_id.is_some() {
+            built.methods.push(method);
+        } else {
+            built.methods.insert(0, method);
+        }
+    }
+    if built.default_auth_method_id.is_none() {
+        built.default_auth_method_id = Some(agent_client_protocol::AuthMethodId::new(
+            VENDOR_AUTH_METHOD_ID,
+        ));
+    }
+}
+
+fn vendor_auth_method() -> agent_client_protocol::AuthMethod {
+    agent_client_protocol::AuthMethod::Agent(
+        agent_client_protocol::AuthMethodAgent::new(
+            agent_client_protocol::AuthMethodId::new(VENDOR_AUTH_METHOD_ID),
+            "Configured provider".to_string(),
+        )
+        .description(Some(
+            "Use a credential from ~/.grok/vendor-auth.json".into(),
+        )),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::{vendor_auth_user_message, vendor_id_for_base_url};
@@ -149,5 +204,10 @@ mod tests {
     fn skip_xai_startup_auto_login_unless_force_login() {
         assert!(super::skip_xai_startup_auto_login(false));
         assert!(!super::skip_xai_startup_auto_login(true));
+    }
+
+    #[test]
+    fn official_auto_update_is_disabled() {
+        assert!(super::skip_official_auto_update());
     }
 }
