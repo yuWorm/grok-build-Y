@@ -94,6 +94,13 @@ pub fn vendor_auth_user_message(provider_id: &str) -> String {
     )
 }
 
+/// groky does not auto-open grok.com on first launch. Welcome stays usable;
+/// `/login` and `groky login` still work. `--force-login` keeps upstream
+/// auto-open.
+pub fn skip_xai_startup_auto_login(force_login: bool) -> bool {
+    !force_login
+}
+
 #[cfg(test)]
 mod tests {
     use super::{vendor_auth_user_message, vendor_id_for_base_url};
@@ -136,5 +143,11 @@ mod tests {
         let msg = vendor_auth_user_message("openai-codex");
         assert!(msg.contains("/provider-login openai-codex"), "{msg}");
         assert!(!msg.contains("/login "), "{msg}");
+    }
+
+    #[test]
+    fn skip_xai_startup_auto_login_unless_force_login() {
+        assert!(super::skip_xai_startup_auto_login(false));
+        assert!(!super::skip_xai_startup_auto_login(true));
     }
 }

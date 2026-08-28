@@ -1316,16 +1316,9 @@ pub(crate) async fn run(
             }
         }
 
-        // Skip the login splash screen — auto-trigger login immediately
-        // by reusing dispatch_login. Effects are stashed and drained after
-        // the initial render so the user sees the auth UI right away.
         // Empty auth_methods (preferred_method pin with no credentials) is
         // fail-closed: do not invent grok.com / auto-start OIDC.
-        tracing::info!(
-            method_id = ?app.login_method_id,
-            methods_empty = connection.auth_methods.is_empty(),
-            "auto-triggering login at startup"
-        );
+        // GROK_COMPAT: groky skips auto-open unless `--force-login`.
     }
     // else: auth_state defaults to Done (already authenticated eagerly)
     // Effects stashed until after the initial render, so the user sees the
@@ -1338,6 +1331,14 @@ pub(crate) async fn run(
                     xai_grok_shell::agent::auth_method::PREFERRED_API_KEY_UNAVAILABLE.to_string(),
                 ),
             };
+            vec![]
+        } else if xai_grok_shell::compat::skip_xai_startup_auto_login(force_login) {
+            // GROK_COMPAT_HOOK: stay on Welcome; do not open grok.com.
+            // `/login` and `groky login` still start the xAI flow.
+            tracing::info!(
+                method_id = ?app.login_method_id,
+                "skipping grok.com auto-login at startup"
+            );
             vec![]
         } else {
             dispatch::dispatch(Action::Login, &mut app)
