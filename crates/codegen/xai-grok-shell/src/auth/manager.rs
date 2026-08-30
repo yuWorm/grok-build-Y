@@ -785,6 +785,20 @@ impl AuthManager {
         }
     }
 
+    /// Every accessor that hands a credential to a caller reads `inner` through here.
+    /// The direct reads left elsewhere compare token keys or look at `expires_at`, and hand out nothing.
+    fn owned_inner(&self) -> Option<GrokAuth> {
+        let auth = self.with_inner_read(|inner| inner.cloned())?;
+        if !crate::auth::backend::AuthBackend::owns(
+            &crate::auth::backend::ActiveAuthBackend::default(),
+            &auth,
+        ) {
+            tracing::debug!("auth: hiding a cached session another authority minted");
+            return None;
+        }
+        Some(auth)
+    }
+
     /// Hide a cached token rejected by the login policy. No clear here (keeps
     /// the sync read path lock-free); `auth()`/recovery/`new()` do the clearing.
     fn vet_cached(&self, auth: GrokAuth) -> Option<GrokAuth> {
@@ -799,12 +813,7 @@ impl AuthManager {
 
     /// Cached in-memory token if outside the early-invalidation buffer.
     pub(crate) fn current(&self) -> Option<GrokAuth> {
-        let auth = self
-            .inner
-            .read()
-            .as_ref()
-            .filter(|a| !self.is_token_expired(a))
-            .cloned()?;
+        let auth = self.owned_inner().filter(|a| !self.is_token_expired(a))?;
         self.vet_cached(auth)
     }
 
@@ -825,10 +834,8 @@ impl AuthManager {
 
     /// Returns true if credentials exist but have expired.
     pub(crate) fn is_expired(&self) -> bool {
-        self.inner
-            .read()
-            .as_ref()
-            .is_some_and(|a| self.is_token_expired(a))
+        self.owned_inner()
+            .is_some_and(|a| self.is_token_expired(&a))
     }
 
     /// In-memory bearer regardless of the early-invalidation buffer.
@@ -842,11 +849,8 @@ impl AuthManager {
     /// refresh and must not demote a still-accepted token.
     pub(crate) fn current_wire_valid(&self) -> Option<GrokAuth> {
         let auth = self
-            .inner
-            .read()
-            .as_ref()
-            .filter(|a| !self.is_token_hard_expired(a))
-            .cloned()?;
+            .owned_inner()
+            .filter(|a| !self.is_token_hard_expired(a))?;
         self.vet_cached(auth)
     }
 
@@ -875,12 +879,7 @@ impl AuthManager {
 
     /// Expired in-memory entry (for its `refresh_token`).
     pub(crate) fn expired_auth(&self) -> Option<GrokAuth> {
-        let auth = self
-            .inner
-            .read()
-            .as_ref()
-            .filter(|a| self.is_token_expired(a))
-            .cloned()?;
+        let auth = self.owned_inner().filter(|a| self.is_token_expired(a))?;
         self.vet_cached(auth)
     }
 
@@ -1228,7 +1227,7 @@ impl AuthManager {
     /// mis-classify an OIDC token. Carries user fields forward into the
     /// binary's freshly-minted token.
     fn inner_auth_or_external_default(&self) -> GrokAuth {
-        self.inner.read().clone().unwrap_or_else(|| GrokAuth {
+        self.owned_inner().unwrap_or_else(|| GrokAuth {
             auth_mode: AuthMode::External,
             ..Default::default()
         })
@@ -1479,7 +1478,7 @@ impl AuthManager {
     /// `pub(super)` — for refresh dispatch only. External session
     /// classification uses `is_session_based_method`.
     pub(super) fn token_type(&self) -> TokenType {
-        TokenType::from_auth(self.inner.read().as_ref())
+        TokenType::from_auth(self.owned_inner().as_ref())
     }
 
     // ── Pre-request dispatch ──────────────────────────────────────────
@@ -1502,7 +1501,7 @@ impl AuthManager {
     async fn auth_dispatch(self: &Arc<Self>) -> Result<GrokAuth, AuthError> {
         // Snapshot inner ONCE for dispatch atomicity (closes a TOCTOU
         // where a concurrent `clear()` raced `token_type()` + `inner.read()`).
-        let snapshot: Option<GrokAuth> = self.with_inner_read(|inner| inner.cloned());
+        let snapshot: Option<GrokAuth> = self.owned_inner();
         // Kept alongside `snapshot`, which the grace arm below consumes: the
         // devbox arms still need to name the credential they gave up on.
         let snapshot_key: Option<String> = snapshot.as_ref().map(|a| a.key.clone());

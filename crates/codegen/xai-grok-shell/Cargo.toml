@@ -1,7 +1,7 @@
 [package]
 license = "Apache-2.0"
 name = "xai-grok-shell"
-version = "1.0.10"
+version = "1.0.12"
 edition.workspace = true
 
 [features]
@@ -63,11 +63,8 @@ reqwest-middleware = { workspace = true }
 serde = { workspace = true }
 serde_ignored = "0.1"
 serde_json = { workspace = true, features = ["preserve_order"] }
-similar = { workspace = true }
 thiserror = { workspace = true }
 clap = { workspace = true }
-dirs = "6"
-tokio-stream = { workspace = true }
 tower-http = { workspace = true, features = ["cors"] }
 toml = { workspace = true, features = ["preserve_order"] }
 toml_edit = { workspace = true }
@@ -143,6 +140,7 @@ xai-codebase-graph = { path = "../xai-codebase-graph" }
 xai-hunk-tracker = { path = "../xai-hunk-tracker" }
 xai-agent-lifecycle = { workspace = true }
 xai-interjection-core = { workspace = true }
+xai-message-delivery-core = { workspace = true }
 xai-grok-sandbox = { path = "../xai-grok-sandbox", default-features = false }
 xai-chat-state = { path = "../xai-chat-state" }
 # Segment markdown rendering + the `compaction/` store path convention.
@@ -166,6 +164,7 @@ xai-grok-agent = { path = "../xai-grok-agent" }
 xai-grok-bundle = { workspace = true }
 xai-grok-config = { workspace = true }
 xai-grok-config-types = { workspace = true }
+xai-dirs = { workspace = true }
 xai-grok-memory = { workspace = true }
 xai-grok-hooks = { path = "../xai-grok-hooks" }
 xai-hooks-plugins-types = { path = "../xai-hooks-plugins-types" }
@@ -287,6 +286,7 @@ workspace = true
 reqwest = { workspace = true, features = ["blocking"] }
 flate2 = { workspace = true }
 tar = { workspace = true }
+
 [[bin]]
 name = "chat-history-downgrade"
 path = "src/bin/chat-history-downgrade.rs"

@@ -1,4 +1,5 @@
 use super::*;
+use crate::remote::{ModelSource, active_model_source};
 
 // ── Fetch ───────────────────────────────────────────────────────────────────
 
@@ -74,7 +75,9 @@ fn prefetch_models_blocking_gated(
     remote_fetch_enabled: bool,
 ) -> Option<IndexMap<String, ModelEntry>> {
     let cache_auth = fetch_auth.cache_auth_method();
-    let cache_origin = crate::remote::models_list_url(endpoints, fetch_auth);
+    let source = active_model_source(endpoints, fetch_auth);
+    let cache_origin = source.cache_origin();
+
     let cache = ModelsCacheManager::new();
     if let Some(cached) = cache.load_fresh(&cache_auth, &cache_origin) {
         return Some(cached.models);
@@ -86,7 +89,7 @@ fn prefetch_models_blocking_gated(
     }
 
     let _timer = crate::instrumentation_timer!("startup.fetch_models_blocking");
-    match fetch_models_blocking(endpoints, auth, fetch_auth) {
+    match source.fetch(auth) {
         Ok(FetchModelsResult { models, etag }) if !models.is_empty() => {
             let api_base_url_override = match fetch_auth {
                 ModelFetchAuth::ApiKey => Some(endpoints.xai_api_base_url.clone()),

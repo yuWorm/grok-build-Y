@@ -26,7 +26,8 @@ use xai_grok_sampling_types::error::{
 };
 use xai_grok_sampling_types::{
     ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse, ConversationRequest,
-    ConversationResponse, CreateResponseWrapper, DOOM_LOOP_CHECK_HEADER, MessagesRequestWrapper,
+    ConversationResponse, CreateResponseWrapper, DEFAULT_EXACT_REPETITION_MIN_TOKENS,
+    DOOM_LOOP_CHECK_HEADER, EXACT_REPETITION_CHECK_HEADER, MessagesRequestWrapper,
     ResponseModelMetadata, Result, SamplingError, SentCredential, build_messages_request,
     is_check_event, messages, rs,
 };
@@ -52,6 +53,8 @@ struct GrokRequestHeaders<'a> {
     model_id: &'a str,
     session_id: &'a str,
     turn_idx: Option<&'a str>,
+    /// Turn-level resubmit attempt; the proxy counts retry traffic by it.
+    transient_retry: Option<&'a str>,
     agent_id: &'a str,
     deployment_id: Option<&'a str>,
     user_id: Option<&'a str>,
@@ -83,6 +86,9 @@ impl GrokRequestHeaders<'_> {
             .header("x-grok-agent-id", self.agent_id);
         if let Some(idx) = self.turn_idx {
             b = b.header("x-grok-turn-idx", idx);
+        }
+        if let Some(attempt) = self.transient_retry {
+            b = b.header("x-grok-transient-retry", attempt);
         }
         if let Some(id) = self.deployment_id.filter(|s| !s.is_empty()) {
             b = b.header("x-grok-deployment-id", id);
@@ -1030,6 +1036,7 @@ impl SamplingClient {
             model_id: &model_id,
             session_id: payload.x_grok_session_id.as_deref().unwrap_or_default(),
             turn_idx: payload.x_grok_turn_idx.as_deref(),
+            transient_retry: payload.x_grok_transient_retry.as_deref(),
             agent_id: payload.x_grok_agent_id.as_deref().unwrap_or_default(),
             deployment_id: payload.x_grok_deployment_id.as_deref(),
             user_id: payload.x_grok_user_id.as_deref(),
@@ -1090,6 +1097,7 @@ impl SamplingClient {
             model_id: &model_id,
             session_id: payload.x_grok_session_id.as_deref().unwrap_or_default(),
             turn_idx: payload.x_grok_turn_idx.as_deref(),
+            transient_retry: payload.x_grok_transient_retry.as_deref(),
             agent_id: payload.x_grok_agent_id.as_deref().unwrap_or_default(),
             deployment_id: payload.x_grok_deployment_id.as_deref(),
             user_id: payload.x_grok_user_id.as_deref(),
@@ -1305,6 +1313,7 @@ impl SamplingClient {
             model_id: &model_id,
             session_id: request.x_grok_session_id.as_deref().unwrap_or_default(),
             turn_idx: request.x_grok_turn_idx.as_deref(),
+            transient_retry: request.x_grok_transient_retry.as_deref(),
             agent_id: request.x_grok_agent_id.as_deref().unwrap_or_default(),
             deployment_id: request.x_grok_deployment_id.as_deref(),
             user_id: request.x_grok_user_id.as_deref(),
@@ -1446,6 +1455,7 @@ impl SamplingClient {
             model_id: &model_id,
             session_id: request.x_grok_session_id.as_deref().unwrap_or_default(),
             turn_idx: request.x_grok_turn_idx.as_deref(),
+            transient_retry: request.x_grok_transient_retry.as_deref(),
             agent_id: request.x_grok_agent_id.as_deref().unwrap_or_default(),
             deployment_id: request.x_grok_deployment_id.as_deref(),
             user_id: request.x_grok_user_id.as_deref(),
@@ -1482,8 +1492,12 @@ impl SamplingClient {
         if crate::compat::allows_xai_request_extensions(&self.base_url)
             && let Some(policy) = self.defaults.doom_loop_recovery
         {
-            http_request =
-                http_request.header(DOOM_LOOP_CHECK_HEADER, policy.window_tokens.to_string());
+            http_request = http_request
+                .header(DOOM_LOOP_CHECK_HEADER, policy.window_tokens.to_string())
+                .header(
+                    EXACT_REPETITION_CHECK_HEADER,
+                    DEFAULT_EXACT_REPETITION_MIN_TOKENS.to_string(),
+                );
         }
         let http_request = http_request.json(&request_body);
 
@@ -1695,6 +1709,7 @@ impl SamplingClient {
             model_id: &model_id,
             session_id: request.x_grok_session_id.as_deref().unwrap_or_default(),
             turn_idx: request.x_grok_turn_idx.as_deref(),
+            transient_retry: request.x_grok_transient_retry.as_deref(),
             agent_id: request.x_grok_agent_id.as_deref().unwrap_or_default(),
             deployment_id: request.x_grok_deployment_id.as_deref(),
             user_id: request.x_grok_user_id.as_deref(),
@@ -1814,6 +1829,7 @@ impl SamplingClient {
             model_id: &model_id,
             session_id: request.x_grok_session_id.as_deref().unwrap_or_default(),
             turn_idx: request.x_grok_turn_idx.as_deref(),
+            transient_retry: request.x_grok_transient_retry.as_deref(),
             agent_id: request.x_grok_agent_id.as_deref().unwrap_or_default(),
             deployment_id: request.x_grok_deployment_id.as_deref(),
             user_id: request.x_grok_user_id.as_deref(),
@@ -2056,6 +2072,7 @@ impl SamplingClient {
         let x_grok_req_id = request.x_grok_req_id.clone();
         let x_grok_session_id = request.x_grok_session_id.clone();
         let x_grok_turn_idx = request.x_grok_turn_idx.clone();
+        let x_grok_transient_retry = request.x_grok_transient_retry.clone();
         let x_grok_agent_id = request.x_grok_agent_id.clone();
 
         // The hosted tools travel as raw JSON, spliced in after serialization by
@@ -2069,6 +2086,7 @@ impl SamplingClient {
         wrapper.x_grok_req_id = x_grok_req_id;
         wrapper.x_grok_session_id = x_grok_session_id;
         wrapper.x_grok_turn_idx = x_grok_turn_idx;
+        wrapper.x_grok_transient_retry = x_grok_transient_retry;
         wrapper.x_grok_agent_id = x_grok_agent_id;
         wrapper.extra_tool_entries = extra_tools;
 
@@ -2093,6 +2111,7 @@ impl SamplingClient {
         let x_grok_req_id = request.x_grok_req_id.clone();
         let x_grok_session_id = request.x_grok_session_id.clone();
         let x_grok_turn_idx = request.x_grok_turn_idx.clone();
+        let x_grok_transient_retry = request.x_grok_transient_retry.clone();
         let x_grok_agent_id = request.x_grok_agent_id.clone();
 
         // The hosted tools travel as raw JSON, spliced in by `create_response` through
@@ -2106,6 +2125,7 @@ impl SamplingClient {
         wrapper.x_grok_req_id = x_grok_req_id;
         wrapper.x_grok_session_id = x_grok_session_id;
         wrapper.x_grok_turn_idx = x_grok_turn_idx;
+        wrapper.x_grok_transient_retry = x_grok_transient_retry;
         wrapper.x_grok_agent_id = x_grok_agent_id;
         wrapper.extra_tool_entries = extra_tools;
 
@@ -2133,6 +2153,7 @@ impl SamplingClient {
         let x_grok_req_id = request.x_grok_req_id.clone();
         let x_grok_session_id = request.x_grok_session_id.clone();
         let x_grok_turn_idx = request.x_grok_turn_idx.clone();
+        let x_grok_transient_retry = request.x_grok_transient_retry.clone();
         let x_grok_agent_id = request.x_grok_agent_id.clone();
 
         let messages_request = build_messages_request(&request);
@@ -2142,6 +2163,7 @@ impl SamplingClient {
         wrapper.x_grok_req_id = x_grok_req_id;
         wrapper.x_grok_session_id = x_grok_session_id;
         wrapper.x_grok_turn_idx = x_grok_turn_idx;
+        wrapper.x_grok_transient_retry = x_grok_transient_retry;
         wrapper.x_grok_agent_id = x_grok_agent_id;
 
         if let Some(trace) = trace {
@@ -2165,6 +2187,7 @@ impl SamplingClient {
         let x_grok_req_id = request.x_grok_req_id.clone();
         let x_grok_session_id = request.x_grok_session_id.clone();
         let x_grok_turn_idx = request.x_grok_turn_idx.clone();
+        let x_grok_transient_retry = request.x_grok_transient_retry.clone();
         let x_grok_agent_id = request.x_grok_agent_id.clone();
 
         let messages_request = build_messages_request(&request);
@@ -2174,6 +2197,7 @@ impl SamplingClient {
         wrapper.x_grok_req_id = x_grok_req_id;
         wrapper.x_grok_session_id = x_grok_session_id;
         wrapper.x_grok_turn_idx = x_grok_turn_idx;
+        wrapper.x_grok_transient_retry = x_grok_transient_retry;
         wrapper.x_grok_agent_id = x_grok_agent_id;
 
         if let Some(trace) = trace {
@@ -2186,11 +2210,8 @@ impl SamplingClient {
     /// Backend-aware streaming call that collects the full response.
     ///
     /// Honors the request's [`LengthPolicy`](xai_grok_sampling_types::LengthPolicy)
-    /// like the actor path: under the default `Fail`, a `Length` stop is an
-    /// error, so side callers (autocomplete, memory notes, summaries) never
-    /// persist a silently truncated result. Under `CompletePartial` the
-    /// same salvage gate as `drive_l2` applies: empty Length and Length
-    /// carrying tool calls still fail.
+    /// like the actor path: the default still fails text-only or empty
+    /// `Length`, so side callers never persist a silently truncated result.
     pub async fn conversation_collect(
         &self,
         request: ConversationRequest,
@@ -2252,6 +2273,16 @@ pub(crate) fn apply_length_policy(
                 content_len = response.assistant().map_or(0, |a| a.content.len()),
                 completion_tokens = response.usage.as_ref().map(|u| u.completion_tokens),
                 "salvaging Length-truncated response per LengthPolicy::CompletePartial"
+            );
+            Ok(response)
+        }
+        LengthVerdict::SalvageToolCalls => {
+            // Breadcrumb for counting turns rescued from max_tokens_truncation.
+            tracing::info!(
+                tool_calls = response.tool_calls().len(),
+                content_len = response.assistant().map_or(0, |a| a.content.len()),
+                completion_tokens = response.usage.as_ref().map(|u| u.completion_tokens),
+                "completing Length-truncated response with completed tool calls"
             );
             Ok(response)
         }
@@ -2415,6 +2446,7 @@ mod tests {
             x_grok_req_id: None,
             x_grok_session_id: None,
             x_grok_turn_idx: None,
+            x_grok_transient_retry: None,
             x_grok_agent_id: None,
             x_grok_deployment_id: None,
             x_grok_user_id: None,
@@ -2438,6 +2470,11 @@ mod tests {
                 .and_then(|v| v.get("include_usage"))
                 .and_then(|v| v.as_bool()),
             Some(true)
+        );
+        assert!(
+            !obj.keys().any(|k| k.starts_with("x_grok_")),
+            "x_grok_* are header fields and must never serialize into the body: {:?}",
+            obj.keys().collect::<Vec<_>>()
         );
 
         assert!(

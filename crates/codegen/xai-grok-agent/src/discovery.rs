@@ -73,7 +73,12 @@ pub enum SubagentSource {
 /// 4. Filter: remove agents toggled off via `[subagents.toggle]`
 pub fn all_subagents(cwd: &Path, toggle: &HashMap<String, bool>) -> Vec<SubagentEntry> {
     let grok = xai_grok_config::user_grok_home();
-    all_subagents_with_home(cwd, toggle, dirs::home_dir().as_deref(), grok.as_deref())
+    all_subagents_with_home(
+        cwd,
+        toggle,
+        xai_dirs::home_dir().as_deref(),
+        grok.as_deref(),
+    )
 }
 
 fn all_subagents_with_home(
@@ -225,7 +230,7 @@ pub(crate) fn user_agent_dirs(
 
 pub fn discover(cwd: &Path) -> Vec<AgentDefinition> {
     let grok = xai_grok_config::user_grok_home();
-    discover_with_home(cwd, dirs::home_dir().as_deref(), grok.as_deref())
+    discover_with_home(cwd, xai_dirs::home_dir().as_deref(), grok.as_deref())
 }
 
 fn discover_with_home(
@@ -252,7 +257,7 @@ fn discover_with_home(
 /// Checks built-ins first, then user-level dirs, then bundled.
 pub fn by_name(name: &str) -> Option<AgentDefinition> {
     let grok = xai_grok_config::user_grok_home();
-    by_name_with_home(name, dirs::home_dir().as_deref(), grok.as_deref())
+    by_name_with_home(name, xai_dirs::home_dir().as_deref(), grok.as_deref())
 }
 
 fn by_name_with_home(
@@ -288,7 +293,7 @@ fn by_name_with_home(
 /// to built-ins, user-level, and finally bundled definitions.
 pub fn by_name_in_cwd(name: &str, cwd: &Path) -> Option<AgentDefinition> {
     let grok = xai_grok_config::user_grok_home();
-    by_name_in_cwd_with_home(name, cwd, dirs::home_dir().as_deref(), grok.as_deref())
+    by_name_in_cwd_with_home(name, cwd, xai_dirs::home_dir().as_deref(), grok.as_deref())
 }
 
 fn by_name_in_cwd_with_home(
@@ -413,7 +418,7 @@ pub fn all_subagents_with_plugins(
         cwd,
         toggle,
         plugins,
-        dirs::home_dir().as_deref(),
+        xai_dirs::home_dir().as_deref(),
         grok.as_deref(),
     )
 }
@@ -472,7 +477,7 @@ pub fn by_name_in_cwd_with_plugins(
         name,
         cwd,
         plugins,
-        dirs::home_dir().as_deref(),
+        xai_dirs::home_dir().as_deref(),
         grok.as_deref(),
     )
 }

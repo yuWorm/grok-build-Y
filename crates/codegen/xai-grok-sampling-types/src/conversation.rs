@@ -596,13 +596,20 @@ impl From<ToolDefinition> for ToolSpec {
 ///
 /// `Length` can arrive far below any client budget (e.g. an engine-side
 /// window clamp after a runaway generation); callers that can use partial
-/// output opt into `CompletePartial`.
+/// text opt into `CompletePartial`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum LengthPolicy {
     /// Fail the attempt with `MaxTokensTruncation` (legacy behavior).
-    #[default]
     Fail,
-    /// Complete with the partial response; empty-Length still fails.
+    /// Complete a response whose tool calls all carry complete arguments;
+    /// text-only and empty `Length` still fail. `Length` is usually context
+    /// exhaustion (output budget = window minus prompt), so retrying cannot
+    /// succeed — executing the calls advances the turn toward compaction.
+    /// The default: a caller that does not choose gets its tool calls run
+    /// and its text-only truncation failed.
+    #[default]
+    CompleteToolCalls,
+    /// Additionally complete with partial text; empty `Length` still fails.
     CompletePartial,
 }
 
@@ -611,8 +618,10 @@ pub enum LengthPolicy {
 pub enum LengthVerdict {
     /// The stop reason is not `Length`; the policy does not apply.
     Pass,
-    /// A `Length` stop delivered with its partial content.
+    /// A `Length` stop delivered with its partial text content.
     Salvage,
+    /// A `Length` stop delivered with its completed tool calls.
+    SalvageToolCalls,
     /// A `Length` stop the policy rejects (`MaxTokensTruncation`).
     Fail,
 }
@@ -623,19 +632,40 @@ impl LengthPolicy {
     /// wraps it with the error mapping and salvage breadcrumb so the actor
     /// path (`drive_l2`) and the direct-collect path can never diverge.
     ///
-    /// Two cases fail regardless of policy: empty Length (deterministic
-    /// under a fixed cap; the Empty resample family would retry-storm) and
-    /// Length carrying tool calls (the trailing call's arguments may be
-    /// truncated). Guarantees the invariant: a salvaged response has
-    /// visible content and no tool calls.
+    /// Tool calls salvage under every policy except `Fail`, but only with
+    /// complete arguments: the xAI server never emits a completed
+    /// `tool_calls` entry for a truncated call, and the JSON check guards
+    /// providers that close a block they cut mid-arguments. Empty Length
+    /// fails regardless of policy (deterministic under a fixed cap; the
+    /// Empty resample family would retry-storm). In practice the tool-call
+    /// arm guards the Messages backend only: ChatCompletions and Responses
+    /// rewrite Length-with-tools to `ToolCalls` at the stream layer, so
+    /// those never reach it.
     pub fn verdict(self, response: &ConversationResponse) -> LengthVerdict {
         if response.stop_reason != Some(StopReason::Length) {
             return LengthVerdict::Pass;
         }
-        if self == LengthPolicy::CompletePartial
-            && response.empty_reason().is_none()
-            && response.tool_calls().is_empty()
-        {
+        let tool_calls = response.tool_calls();
+        if !tool_calls.is_empty() {
+            // Empty arguments are the zero-arg call convention, not proof of
+            // truncation: a call cut before its first argument delta also
+            // collects as empty, but executing it as `{}` just bounces off
+            // tool-argument validation — cheaper than failing the turn.
+            let all_arguments_complete = tool_calls.iter().all(|tc| {
+                tc.arguments.trim().is_empty()
+                    || serde_json::from_str::<serde::de::IgnoredAny>(&tc.arguments).is_ok()
+            });
+            return match (self, all_arguments_complete) {
+                (LengthPolicy::Fail, _)
+                | (LengthPolicy::CompleteToolCalls | LengthPolicy::CompletePartial, false) => {
+                    LengthVerdict::Fail
+                }
+                (LengthPolicy::CompleteToolCalls | LengthPolicy::CompletePartial, true) => {
+                    LengthVerdict::SalvageToolCalls
+                }
+            };
+        }
+        if self == LengthPolicy::CompletePartial && response.empty_reason().is_none() {
             LengthVerdict::Salvage
         } else {
             LengthVerdict::Fail
@@ -668,6 +698,9 @@ pub struct ConversationRequest {
     pub x_grok_req_id: Option<String>,
     pub x_grok_session_id: Option<String>,
     pub x_grok_turn_idx: Option<String>,
+    /// Turn-level resubmit attempt (absent on first submissions); sent as
+    /// `x-grok-transient-retry` so the proxy can count retry traffic.
+    pub x_grok_transient_retry: Option<String>,
     pub x_grok_agent_id: Option<String>,
     pub x_grok_deployment_id: Option<String>,
     pub x_grok_user_id: Option<String>,
@@ -896,8 +929,14 @@ pub struct ConversationResponse {
     /// Provider message id (Messages `message.id`); `None` on backends that do
     /// not carry one (OAI Chat Completions / Responses).
     pub message_id: Option<String>,
-    /// Verbatim wire stop reason before it collapses into [`StopReason`]
-    /// (e.g. `end_turn`, `tool_use`, `pause_turn`); `None` when unreported.
+    /// Wire stop reason before it collapses into [`StopReason`]: verbatim on
+    /// the Messages backend (e.g. `end_turn`, `tool_use`, `pause_turn`); on
+    /// the Responses backend only length cuts on tool-less turns are carried,
+    /// mapped from `incomplete_details.reason` to `max_tokens` (output cap)
+    /// or `model_context_window_exceeded` (context window). The Messages
+    /// strings are reused for one client vocabulary, not backend parity: the
+    /// xAI Messages surface reports a context cut as `max_tokens`, while the
+    /// Responses mapping distinguishes it. `None` when unreported.
     pub raw_stop_reason: Option<String>,
     /// The provider's matched stop sequence (Messages API
     /// `message_delta.stop_sequence`), present only when the model stopped on a
@@ -5179,16 +5218,66 @@ mod tests {
             r.stop_reason = Some(StopReason::Length);
             r
         };
+        let call = |arguments: &str| ToolCall {
+            id: "tc1".into(),
+            name: "do_thing".into(),
+            arguments: arguments.into(),
+        };
         let text = length(ConversationItem::assistant("partial"));
         let empty = length(ConversationItem::assistant(""));
-        let tool_calls = length(ConversationItem::assistant_tool_calls(vec![ToolCall {
-            id: "call_cut".into(),
-            name: "do_thing".into(),
-            arguments: "{\"x\": \"trunc".into(),
-        }]));
+        let complete_tools = length(ConversationItem::assistant_tool_calls(vec![call(
+            "{\"x\": 1}",
+        )]));
+        // Zero-arg calls stream empty arguments; downstream normalizes to `{}`.
+        let empty_args_tools = length(ConversationItem::assistant_tool_calls(vec![call("")]));
+        let truncated_tools = length(ConversationItem::assistant_tool_calls(vec![call(
+            "{\"x\": \"trunc",
+        )]));
+        // One truncated call poisons the batch even when siblings are complete.
+        let mixed_tools = length(ConversationItem::assistant_tool_calls(vec![
+            call("{\"x\": 1}"),
+            call("{\"x\": \"trunc"),
+        ]));
         let stop = make_response(ConversationItem::assistant("done"));
 
+        assert_eq!(LengthPolicy::default(), LengthPolicy::CompleteToolCalls);
+
         assert_eq!(LengthPolicy::Fail.verdict(&text), LengthVerdict::Fail);
+        assert_eq!(
+            LengthPolicy::Fail.verdict(&complete_tools),
+            LengthVerdict::Fail
+        );
+        assert_eq!(LengthPolicy::Fail.verdict(&stop), LengthVerdict::Pass);
+
+        assert_eq!(
+            LengthPolicy::CompleteToolCalls.verdict(&complete_tools),
+            LengthVerdict::SalvageToolCalls
+        );
+        assert_eq!(
+            LengthPolicy::CompleteToolCalls.verdict(&empty_args_tools),
+            LengthVerdict::SalvageToolCalls
+        );
+        assert_eq!(
+            LengthPolicy::CompleteToolCalls.verdict(&truncated_tools),
+            LengthVerdict::Fail
+        );
+        assert_eq!(
+            LengthPolicy::CompleteToolCalls.verdict(&mixed_tools),
+            LengthVerdict::Fail
+        );
+        assert_eq!(
+            LengthPolicy::CompleteToolCalls.verdict(&text),
+            LengthVerdict::Fail
+        );
+        assert_eq!(
+            LengthPolicy::CompleteToolCalls.verdict(&empty),
+            LengthVerdict::Fail
+        );
+        assert_eq!(
+            LengthPolicy::CompleteToolCalls.verdict(&stop),
+            LengthVerdict::Pass
+        );
+
         assert_eq!(
             LengthPolicy::CompletePartial.verdict(&text),
             LengthVerdict::Salvage
@@ -5198,10 +5287,13 @@ mod tests {
             LengthVerdict::Fail
         );
         assert_eq!(
-            LengthPolicy::CompletePartial.verdict(&tool_calls),
+            LengthPolicy::CompletePartial.verdict(&complete_tools),
+            LengthVerdict::SalvageToolCalls
+        );
+        assert_eq!(
+            LengthPolicy::CompletePartial.verdict(&truncated_tools),
             LengthVerdict::Fail
         );
-        assert_eq!(LengthPolicy::Fail.verdict(&stop), LengthVerdict::Pass);
         assert_eq!(
             LengthPolicy::CompletePartial.verdict(&stop),
             LengthVerdict::Pass

@@ -1,19 +1,17 @@
 //! Read-only system-block text for `/queue`, `/tasks`, and `/usage`.
 //!
-//! Plain text committed into scrollback — the primary inspection surface in
-//! minimal mode (no interactive panes). Kept out of `dispatch` for easy
-//! unit tests.
+//! Plain text committed into scrollback; minimal mode has no interactive panes, so these blocks are its main way to inspect that state.
+//! The formatting lives outside `dispatch` so it is easy to unit test.
 
 use crate::app::agent::BgTaskStatus;
 use crate::app::agent_view::AgentView;
 use crate::app::subagent::format_subagent_label;
 use crate::util::{format_duration, group_thousands};
 
-/// `/queue` body — a read-only list of the queued prompts.
+/// `/queue` body: a read-only list of the queued prompts.
 ///
-/// Server-authoritative shared-queue rows (the in-flight prompt excluded) come
-/// first in broadcast order, then the local drip-feed queue — matching
-/// [`crate::views::queue_pane::QueuePane::sync_from_merged`]'s ordering.
+/// Rows from the server's shared queue (minus the prompt already running) come first in broadcast order, then the local queue (`pending_prompts`).
+/// This matches [`crate::views::queue_pane::QueuePane::sync_from_merged`]'s ordering.
 pub(crate) fn queue_block_text(agent: &AgentView) -> String {
     let running_id = agent.session.current_prompt_id.as_deref();
 
@@ -43,8 +41,7 @@ pub(crate) fn queue_block_text(agent: &AgentView) -> String {
     }
 }
 
-///
-/// [`crate::views::tasks_pane::TasksPane`] without its styled rows.
+/// `/tasks` body: [`crate::views::tasks_pane::TasksPane`] without its styled rows.
 pub(crate) fn tasks_block_text(agent: &AgentView) -> String {
     let mut rows: Vec<String> = Vec::new();
 
@@ -177,8 +174,7 @@ pub(crate) fn tasks_block_text(agent: &AgentView) -> String {
     }
 }
 
-/// `/usage` body — per-session token and cost totals, scoped to the ledger's
-/// lifetime: since session start, or since the last `/resume`.
+/// `/usage` body: per-session token and cost totals, covering the ledger's lifetime (since session start, or since the last `/resume`).
 pub(crate) fn session_usage_block_text(
     usage: &xai_grok_shell::extensions::notification::PromptUsage,
 ) -> String {
@@ -236,7 +232,7 @@ pub(crate) fn session_usage_block_text(
     )
 }
 
-/// Cost cell. Ticks are 1e10 per USD; partial sums are scrubbed to absent.
+/// Formats the cost cell. Ticks are 1e10 per USD; a partial sum is reported as absent.
 fn format_cost(m: &xai_grok_shell::extensions::notification::PromptUsageModel) -> String {
     use xai_grok_shell::extensions::notification::ticks_to_usd;
     match m.cost_usd_ticks {
@@ -246,8 +242,7 @@ fn format_cost(m: &xai_grok_shell::extensions::notification::PromptUsageModel) -
     }
 }
 
-/// First non-empty, trimmed line of `text` (empty string if none). Collapses a
-/// multi-line prompt/command to a single display line.
+/// First non-empty, trimmed line of `text` (empty string if none). Collapses a multi-line prompt/command to a single display line.
 pub(crate) fn first_nonempty_line(text: &str) -> &str {
     text.lines()
         .map(str::trim)
@@ -255,8 +250,7 @@ pub(crate) fn first_nonempty_line(text: &str) -> &str {
         .unwrap_or("")
 }
 
-/// Format one `/queue` row as `  #N  <first non-empty line>` with a
-/// `(+K more lines)` suffix for multi-line prompts.
+/// Format one `/queue` row as `  #N  <first non-empty line>` with a `(+K more lines)` suffix for multi-line prompts.
 fn format_queue_row(pos: usize, text: &str) -> String {
     let first_line = first_nonempty_line(text);
     let extra = text.lines().count().saturating_sub(1);
@@ -270,7 +264,6 @@ fn format_queue_row(pos: usize, text: &str) -> String {
     }
 }
 
-/// Join a header line above its rows into a single block string.
 fn join_header_rows(header: String, rows: Vec<String>) -> String {
     std::iter::once(header)
         .chain(rows)
@@ -327,8 +320,7 @@ mod tests {
             ..Default::default()
         };
         let text = session_usage_block_text(&usage);
-        // Snapshot pins content and column alignment together; single-model
-        // sessions must skip the redundant by-model breakdown.
+        // Snapshot pins content and column alignment together; single-model sessions must skip the redundant by-model breakdown
         insta::assert_snapshot!("session_usage_block_full", text);
     }
 

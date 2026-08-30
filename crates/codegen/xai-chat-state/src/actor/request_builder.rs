@@ -102,6 +102,7 @@ impl ChatStateActor {
             x_grok_req_id: Some(req_id),
             x_grok_session_id: None,
             x_grok_turn_idx: None,
+            x_grok_transient_retry: None,
             x_grok_agent_id: None,
             x_grok_deployment_id: None,
             x_grok_user_id: None,
@@ -109,9 +110,9 @@ impl ChatStateActor {
             prompt_cache_key: None,
             reasoning_effort: self.state.sampling_config.reasoning_effort,
             json_schema: None,
-            // Default: callers that can use partial output opt into
-            // `CompletePartial`.
-            length_policy: xai_grok_sampling_types::LengthPolicy::Fail,
+            // Execute completed tool calls on a Length-truncated turn instead
+            // of failing it; text-only salvage stays behind `CompletePartial`.
+            length_policy: xai_grok_sampling_types::LengthPolicy::CompleteToolCalls,
         }
     }
 }

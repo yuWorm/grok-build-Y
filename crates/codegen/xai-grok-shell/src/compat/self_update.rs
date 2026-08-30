@@ -84,7 +84,7 @@ pub fn updates_allowed() -> bool {
 }
 
 pub(crate) fn groky_home() -> PathBuf {
-    dirs::home_dir()
+    xai_dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".groky")
 }

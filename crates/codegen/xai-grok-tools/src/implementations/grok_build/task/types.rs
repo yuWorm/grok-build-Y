@@ -28,8 +28,9 @@ use xai_tool_types::{SubagentCapabilityMode, SubagentIsolationMode, WaitMode};
 use crate::register_resource;
 
 pub use super::active_message::{
-    ActiveAgentMessage, ActiveAgentMessageDelivery, ActiveAgentMessageOutcome,
-    ActiveAgentMessageRequest, MAX_ACTIVE_AGENT_MESSAGE_BYTES, SubagentActiveMessageRequest,
+    ActiveAgentMessage, ActiveAgentMessageDelivery, ActiveAgentMessageOperation,
+    ActiveAgentMessageOutcome, ActiveAgentMessageRequest, MAX_ACTIVE_AGENT_MESSAGE_BYTES,
+    SubagentActiveMessageRequest,
 };
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -605,6 +606,8 @@ pub struct SubagentCompletionSummary {
     pub subagent_id: String,
     pub subagent_type: String,
     pub description: String,
+    /// Scheduled task that launched this child, when applicable.
+    pub loop_task_id: Option<String>,
     pub success: bool,
     pub duration_ms: u64,
     pub tool_calls: u32,
@@ -1469,6 +1472,7 @@ mod tests {
             subagent_id: "sub-1".into(),
             subagent_type: "general-purpose".into(),
             description: "test task".into(),
+            loop_task_id: None,
             success: true,
             duration_ms: 1500,
             tool_calls: 7,

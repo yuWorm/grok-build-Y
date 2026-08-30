@@ -2007,11 +2007,26 @@ pub(crate) fn add_hooks_path_to_file(
     writeln!(file, "{}", path)?;
     Ok(())
 }
+/// The user-registered hook directories (`~/.grok/hooks-paths` lines) —
+/// exactly what `remove_hooks_path` can remove (same exact-string match).
+pub(crate) fn registered_hook_paths() -> std::collections::HashSet<String> {
+    let path = crate::util::grok_home::grok_home().join("hooks-paths");
+    match std::fs::read_to_string(&path) {
+        Ok(content) => content
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .map(str::to_owned)
+            .collect(),
+        Err(_) => std::collections::HashSet::new(),
+    }
+}
 /// Remove a hook path from `~/.grok/hooks-paths`.
 ///
-/// If the path is not found (exact string match), this is a no-op.
-/// Matches the same exact-string behavior as `add_hooks_path`.
-pub(crate) fn remove_hooks_path(path: &str) -> Result<(), Box<dyn std::error::Error>> {
+/// Returns whether the path was present (exact string match, like
+/// `add_hooks_path`); on `false` nothing was removed and callers must not
+/// claim success.
+pub(crate) fn remove_hooks_path(path: &str) -> Result<bool, Box<dyn std::error::Error>> {
     remove_hooks_path_from_file(
         path,
         &crate::util::grok_home::grok_home().join("hooks-paths"),
@@ -2021,10 +2036,10 @@ pub(crate) fn remove_hooks_path(path: &str) -> Result<(), Box<dyn std::error::Er
 pub(crate) fn remove_hooks_path_from_file(
     path: &str,
     paths_file: &std::path::Path,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<bool, Box<dyn std::error::Error>> {
     let content = match std::fs::read_to_string(paths_file) {
         Ok(c) => c,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
         Err(e) => return Err(e.into()),
     };
     let mut found = false;
@@ -2040,7 +2055,7 @@ pub(crate) fn remove_hooks_path_from_file(
         })
         .collect();
     if !found {
-        return Ok(());
+        return Ok(false);
     }
     if let Some(parent) = paths_file.parent() {
         std::fs::create_dir_all(parent)?;
@@ -2049,7 +2064,7 @@ pub(crate) fn remove_hooks_path_from_file(
         paths_file,
         new_lines.join("\n") + (if new_lines.is_empty() { "" } else { "\n" }),
     )?;
-    Ok(())
+    Ok(true)
 }
 #[cfg(test)]
 mod tests;

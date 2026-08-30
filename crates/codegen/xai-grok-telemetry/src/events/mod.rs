@@ -1107,6 +1107,19 @@ pub struct HookExecuted {
 #[derive(Serialize)]
 pub struct HookBlocked {
     pub hook_name: String,
+    pub cause: HookBlockCause,
+}
+
+#[derive(Serialize, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+pub enum HookBlockCause {
+    Denied,
+    /// A `PreToolUse` `updatedInput` that could not be applied.
+    UnusableRewrite,
+    /// A `Stop`/`SubagentStop` hook blocked the agent from stopping.
+    StopBlocked,
+    /// A `UserPromptSubmit` hook blocked the prompt before the turn started.
+    PromptBlocked,
 }
 
 /// Per-callback outcome of a `PreToolUse` gate. A deny returns early, so callbacks
@@ -1519,6 +1532,9 @@ pub struct ActionStationarityStop {
 pub struct ToolCallCompleted {
     pub tool_name: String,
     pub outcome: xai_grok_session_events::types::ToolOutcome,
+    /// Content-free: the hook name is kept out of OTLP and product events and
+    /// rides only the session-event row.
+    pub hook_rewrote: bool,
     pub duration_ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_result_size_bytes: Option<u64>,
@@ -1588,6 +1604,28 @@ pub struct SessionEnded {
     pub tool_call_count: u64,
     pub compaction_count: u64,
     pub model_id: String,
+}
+
+/// Per-session teardown phase durations. Emitted once after feedback so late
+/// phases are not dropped: `SessionEnded` fires mid-teardown.
+#[derive(Serialize, Default)]
+pub struct SessionEndTimings {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory_save_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory_consolidate_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hooks_dispatch_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hooks_stop_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workflows_drain_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workflows_persist_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub feedback_drain_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background_tasks_save_ms: Option<u64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -2513,6 +2551,7 @@ telemetry_event!(
     "session_ended",
     external = crate::external::schema::map_session_end
 );
+telemetry_event!(SessionEndTimings, "session_end_timings");
 telemetry_event!(
     AgentConnect,
     "agent_connect",
@@ -2586,6 +2625,10 @@ telemetry_event!(crate::session_metrics::Turn, "turn");
 telemetry_event!(
     crate::session_metrics::TurnCompletedLifecycle,
     "turn_completed_lifecycle"
+);
+telemetry_event!(
+    crate::session_metrics::DoomLoopDetected,
+    "doom_loop_detected"
 );
 telemetry_event!(
     crate::session_metrics::DoomLoopRecovery,
@@ -2723,6 +2766,8 @@ mod tests {
         );
 
         const ALLOWED: &[(&str, &str)] = &[
+            ("DoomLoopDetected", "session_id"),
+            ("DoomLoopDetected", "turn_number"),
             ("DoomLoopRecovery", "session_id"),
             ("DoomLoopRecovery", "turn_number"),
             ("MemoryFlushComplete", "session_id"),
@@ -2854,6 +2899,7 @@ mod tests {
             serde_json::to_value(ToolCallCompleted {
                 tool_name: "bash".into(),
                 outcome: xai_grok_session_events::types::ToolOutcome::Success,
+                hook_rewrote: false,
                 duration_ms: 7,
                 tool_result_size_bytes: Some(2_048),
                 file_path: None,
@@ -2863,6 +2909,7 @@ mod tests {
             serde_json::json!({
                 "tool_name": "bash",
                 "outcome": "success",
+                "hook_rewrote": false,
                 "duration_ms": 7,
                 "tool_result_size_bytes": 2_048,
             })
@@ -2871,6 +2918,7 @@ mod tests {
             serde_json::to_value(ToolCallCompleted {
                 tool_name: "bash".into(),
                 outcome: xai_grok_session_events::types::ToolOutcome::Success,
+                hook_rewrote: false,
                 duration_ms: 7,
                 tool_result_size_bytes: None,
                 file_path: None,
@@ -2880,6 +2928,7 @@ mod tests {
             serde_json::json!({
                 "tool_name": "bash",
                 "outcome": "success",
+                "hook_rewrote": false,
                 "duration_ms": 7,
             })
         );
