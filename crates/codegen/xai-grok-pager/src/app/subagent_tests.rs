@@ -26,6 +26,7 @@ fn make_min_child_view() -> AgentView {
         pending_prompts: VecDeque::new(),
         next_queue_id: 0,
         yolo_mode: false,
+        fast_mode: false,
         auto_mode: false,
         prompt_history: Vec::new(),
         prompt_history_loading: false,

@@ -2502,6 +2502,19 @@ impl AgentView {
                 bold: false,
             });
         }
+        if self.session.is_fast()
+            && self
+                .session
+                .models
+                .current_model_id_str()
+                .is_some_and(xai_grok_shell::compat::model_supports_openai_fast)
+        {
+            mode_flags_vec.push(PromptFlag {
+                text: "Fast",
+                color: Some(theme.accent_system),
+                bold: false,
+            });
+        }
         let mode_flags: &[PromptFlag] = &mode_flags_vec;
         let multiline = self.multiline_mode;
         let warning = self.credit_balance.as_ref().and_then(|bal| {

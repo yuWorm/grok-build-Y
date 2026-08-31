@@ -582,6 +582,7 @@ pub(super) fn handle_session_notification_with_origin(
                 pending_prompts: std::collections::VecDeque::new(),
                 next_queue_id: 0,
                 yolo_mode: true,
+                fast_mode: false,
                 auto_mode: false,
                 prompt_history: Vec::new(),
                 prompt_history_loading: false,

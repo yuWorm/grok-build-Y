@@ -9,7 +9,7 @@ plus ChatGPT Codex OAuth.
 
 The CLI binary is **`groky`**. It can sit next to official `grok`.
 
-Latest release: [v0.1.8](https://github.com/yuWorm/groky/releases/tag/v0.1.8)
+Latest release: [v0.1.9](https://github.com/yuWorm/groky/releases/tag/v0.1.9)
 
 ## Install
 
@@ -46,6 +46,7 @@ groky
 | Claude Pro/Max (not an `sk-ant-` key) | `/provider-login anthropic-claude` |
 | Custom OpenAI-compatible endpoint | `/provider-login` → custom provider |
 | Switch model | `/model` |
+| Fast mode (official OpenAI / Codex) | `/fast` |
 | Drop a vendor key | `/provider-logout` |
 | Refresh vendor model lists | `/sync-models-dev` |
 | Update groky | `groky update` (Welcome: ctrl+u) |
@@ -59,7 +60,7 @@ A vendor 401 asks for `/provider-login`, not `/login`.
 | Added | Left alone |
 | --- | --- |
 | Multi-provider catalog and custom providers | Agent loop, tools, MCP, ACP |
-| `/provider-login`, `/provider-logout`, `/sync-models-dev` | `/login`, Welcome, `auth.json` |
+| `/provider-login`, `/provider-logout`, `/sync-models-dev`, `/fast` | `/login`, Welcome, `auth.json` |
 | ChatGPT Codex OAuth (`openai-codex`) | Official `grok` CDN install and auto-update |
 | Claude Pro/Max OAuth (`anthropic-claude`) | Anthropic console API keys (`anthropic`) |
 | models.dev reasoning / context overlay | Default auto-compact threshold (85%) |

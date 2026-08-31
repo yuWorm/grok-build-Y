@@ -390,6 +390,38 @@ pub(super) fn set_yolo_mode(app: &mut AppView, new: bool) -> Vec<Effect> {
     }]
 }
 
+/// Session Fast mode. Local chip + ACP notify; not written to config.toml.
+pub(super) fn set_fast_mode(app: &mut AppView, new: bool) -> Vec<Effect> {
+    let ActiveView::Agent(id) = app.active_view else {
+        return vec![];
+    };
+    let Some(agent) = app.agents.get_mut(&id) else {
+        return vec![];
+    };
+    let Some(session_id) = agent.session.session_id.clone() else {
+        app.show_toast("No active session");
+        return vec![];
+    };
+    if agent.session.fast_mode == new {
+        app.show_toast(if new {
+            "Fast mode on"
+        } else {
+            "Fast mode off"
+        });
+        return vec![];
+    }
+    agent.session.fast_mode = new;
+    app.show_toast(if new {
+        "Fast mode on"
+    } else {
+        "Fast mode off"
+    });
+    vec![Effect::NotifyFastMode {
+        enabled: new,
+        session_id,
+    }]
+}
+
 /// Set permission mode by typed kind.
 /// Entry point from the settings modal.
 /// Mirrors `set_yolo_mode` but preserves the canonical string.

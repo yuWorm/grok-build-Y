@@ -1116,6 +1116,25 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
                     modal.active_agent = info.data.agent_name.clone();
                 }
                 agent.apply_full_context_info(info.data.context);
+                let mut fields = fields;
+                let mut text = text;
+                if agent.session.is_fast()
+                    && agent
+                        .session
+                        .models
+                        .current_model_id_str()
+                        .is_some_and(xai_grok_shell::compat::model_supports_openai_fast)
+                {
+                    fields.push(crate::views::usage_modal::SessionInfoField {
+                        label: "Service tier",
+                        value: "fast".to_string(),
+                        compact: true,
+                    });
+                    if !text.is_empty() {
+                        text.push('\n');
+                    }
+                    text.push_str("  Service tier: fast");
+                }
                 if let Some(state) = usage_modal_state_mut(agent) {
                     state.session_fields = Some(fields);
                     state.session_error = None;
@@ -1128,6 +1147,7 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
             }
             vec![]
         }
+        TaskResult::FastModeNotified => vec![],
         TaskResult::SessionInfoFailed {
             agent_id,
             session_id,

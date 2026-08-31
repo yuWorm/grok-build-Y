@@ -289,6 +289,7 @@ pub(crate) async fn create_test_actor_with_terminal(
         compactions_remaining: std::cell::Cell::new(None),
         compaction_at_tokens: std::cell::Cell::new(None),
         doom_loop_recovery: None,
+        fast_mode: std::cell::Cell::new(false),
         doom_loop_turn_tally: Default::default(),
         file_state_tracker: Arc::new(FileStateTracker::new()),
         rewind_pending_prompt: std::sync::Mutex::new(None),

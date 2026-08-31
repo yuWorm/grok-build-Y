@@ -8,7 +8,7 @@ agent、tools、MCP、ACP、TUI 与官方同一套，额外支持第三方模型
 
 命令行二进制是 **`groky`**，可以和官方 `grok` 并存。
 
-最新版本：[v0.1.8](https://github.com/yuWorm/groky/releases/tag/v0.1.8)
+最新版本：[v0.1.9](https://github.com/yuWorm/groky/releases/tag/v0.1.9)
 
 ## 安装
 
@@ -44,6 +44,7 @@ groky
 | Claude Pro/Max（不是 `sk-ant-`） | `/provider-login anthropic-claude` |
 | 自定义 OpenAI 兼容端点 | `/provider-login` → 自定义供应商 |
 | 切换模型 | `/model` |
+| Fast 模式（官方 OpenAI / Codex） | `/fast` |
 | 去掉供应商密钥 | `/provider-logout` |
 | 刷新供应商模型列表 | `/sync-models-dev` |
 | 更新 groky | `groky update`（Welcome：ctrl+u） |
@@ -57,7 +58,7 @@ xAI 登录未改（`AuthManager`、`~/.grok/auth.json`）。第三方密钥不�
 | 做了 | 没动 |
 | --- | --- |
 | 多供应商目录、自定义供应商 | agent 循环、tools、MCP、ACP |
-| `/provider-login`、`/provider-logout`、`/sync-models-dev` | `/login`、Welcome、`auth.json` |
+| `/provider-login`、`/provider-logout`、`/sync-models-dev`、`/fast` | `/login`、Welcome、`auth.json` |
 | ChatGPT Codex OAuth（`openai-codex`） | 官方 `grok` 的 CDN 安装和自更新 |
 | Claude Pro/Max OAuth（`anthropic-claude`） | Anthropic 控制台 API key（`anthropic`） |
 | models.dev 推理档 / 上下文窗口 overlay | 默认压缩阈值（85%） |

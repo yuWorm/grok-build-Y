@@ -117,6 +117,33 @@ pub fn skip_official_auto_update() -> bool {
     true
 }
 
+/// Extra-header key that carries session Fast mode into the sampler.
+/// SamplingClient strips it and never sends it on the wire.
+pub const GROKY_SERVICE_TIER_HEADER: &str = "x-groky-service-tier";
+/// Wire value for `/fast` (OpenAI `service_tier`; Codex accepts `priority`, not `fast`).
+pub const OPENAI_FAST_SERVICE_TIER: &str = "priority";
+
+const OPENAI_FAST_PROVIDERS: &[&str] = &["openai", "openai-codex"];
+
+fn catalog_id_is_provider(model_id: &str, provider: &str) -> bool {
+    model_id == provider || model_id.starts_with(&format!("{provider}/"))
+}
+
+/// Catalog ids for official OpenAI Chat Completions (`openai/…`) and Codex (`openai-codex/…`).
+pub fn model_supports_openai_fast(model_id: &str) -> bool {
+    OPENAI_FAST_PROVIDERS
+        .iter()
+        .any(|provider| catalog_id_is_provider(model_id, provider))
+}
+
+/// Only the official OpenAI and ChatGPT Codex endpoints accept `service_tier`.
+pub fn url_supports_openai_fast(base_url: &str) -> bool {
+    matches!(
+        vendor_id_for_base_url(base_url).as_deref(),
+        Some("openai") | Some("openai-codex")
+    )
+}
+
 /// ACP method id for "a vendor credential is configured" (not grok.com).
 pub const VENDOR_AUTH_METHOD_ID: &str = "vendor";
 
@@ -215,6 +242,30 @@ mod tests {
     fn skip_xai_startup_auto_login_unless_force_login() {
         assert!(super::skip_xai_startup_auto_login(false));
         assert!(!super::skip_xai_startup_auto_login(true));
+    }
+
+    #[test]
+    fn official_openai_and_codex_models_support_fast() {
+        assert!(super::model_supports_openai_fast("openai/gpt-4o"));
+        assert!(super::model_supports_openai_fast("openai-codex/gpt-5.6-sol"));
+        assert!(super::model_supports_openai_fast("openai"));
+        assert!(!super::model_supports_openai_fast("openai-foo/gpt-4o"));
+        assert!(!super::model_supports_openai_fast("openrouter/openai/gpt-4o"));
+        assert!(!super::model_supports_openai_fast("grok-4.5"));
+        assert!(!super::model_supports_openai_fast("anthropic/claude-opus-5"));
+    }
+
+    #[test]
+    fn official_openai_urls_support_fast() {
+        assert!(super::url_supports_openai_fast("https://api.openai.com/v1"));
+        assert!(super::url_supports_openai_fast(
+            "https://chatgpt.com/backend-api/codex"
+        ));
+        assert!(!super::url_supports_openai_fast("https://api.x.ai/v1"));
+        assert!(!super::url_supports_openai_fast(
+            "https://openrouter.ai/api/v1"
+        ));
+        assert!(!super::url_supports_openai_fast("http://localhost:11434/v1"));
     }
 
     #[test]

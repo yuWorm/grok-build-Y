@@ -423,6 +423,8 @@ pub enum Action {
     ToggleYolo,
     /// Set YOLO (auto-approve / `always-approve`) mode.
     SetYoloMode(bool),
+    /// Session Fast mode (`service_tier=priority` on official OpenAI / Codex).
+    SetFastMode(bool),
     /// Set the permission mode by canonical kind (`always-approve` / `ask` / `default`).
     /// Typed wrapper over [`Action::SetYoloMode`] that preserves the `default` canonical (the `bool` variant collapses `default` to `ask`).
     SetPermissionMode(PermissionModeKind),
@@ -1607,6 +1609,11 @@ pub enum Effect {
         session_id: Option<acp::SessionId>,
         persist: PermissionModePersist,
     },
+    /// Tell the shell this session's Fast mode (not persisted).
+    NotifyFastMode {
+        enabled: bool,
+        session_id: acp::SessionId,
+    },
     /// Persist a typed setting to `~/.grok/config.toml`. On failure,
     /// rolls the in-memory cache back to `rollback_value`.
     PersistSetting {
@@ -2726,6 +2733,8 @@ pub enum TaskResult {
         error: String,
         nonce: u64,
     },
+    /// Fast mode ACP notify finished (no UI follow-up).
+    FastModeNotified,
     /// Coding data sharing preference updated.
     CodingDataSharingUpdated {
         agent_id: AgentId,

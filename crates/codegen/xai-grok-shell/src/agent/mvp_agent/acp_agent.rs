@@ -2727,6 +2727,23 @@ impl acp::Agent for MvpAgent {
                 );
             }
         }
+        if args.method.as_ref() == "x.ai/fast_mode_changed"
+            && let Ok(params) = serde_json::from_str::<serde_json::Value>(args.params.get())
+        {
+            let enabled = params
+                .get("fast_mode")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let session_id_str = params
+                .get("sessionId")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if let Some(handle) = self.resident_handle(&acp::SessionId::new(session_id_str)) {
+                let _ = handle
+                    .cmd_tx
+                    .send(crate::session::SessionCommand::SetFastMode { enabled });
+            }
+        }
         if args.method.as_ref() == "x.ai/permissions/reset" {
             let mut updated = 0;
             self.session_registry

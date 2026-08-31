@@ -122,9 +122,38 @@ pub(crate) fn fill_response_usage_defaults(value: &mut Value) -> bool {
     changed
 }
 
+/// Extra-header key the shell uses to pass session Fast mode. Never forwarded HTTP.
+pub(crate) const GROKY_SERVICE_TIER_HEADER: &str = "x-groky-service-tier";
+
 /// ChatGPT Codex Responses (`chatgpt.com/backend-api/codex`).
 pub(crate) fn is_codex_responses_url(base_url: &str) -> bool {
     base_url.contains("chatgpt.com/backend-api/codex")
+}
+
+fn is_openai_api_url(base_url: &str) -> bool {
+    base_url.contains("api.openai.com")
+}
+
+/// Official OpenAI Chat Completions or ChatGPT Codex — the only hosts that get `service_tier`.
+pub(crate) fn official_openai_fast_url(base_url: &str) -> bool {
+    is_codex_responses_url(base_url) || is_openai_api_url(base_url)
+}
+
+/// GROK_COMPAT_HOOK: set `service_tier` on official OpenAI / Codex JSON bodies.
+pub(crate) fn apply_service_tier_to_json(
+    base_url: &str,
+    service_tier: Option<&str>,
+    body: &mut Value,
+) {
+    let Some(tier) = service_tier.filter(|s| !s.is_empty()) else {
+        return;
+    };
+    if !official_openai_fast_url(base_url) {
+        return;
+    }
+    if let Some(obj) = body.as_object_mut() {
+        obj.insert("service_tier".into(), Value::String(tier.to_owned()));
+    }
 }
 
 /// GROK_COMPAT_HOOK: call after grok fills typed Responses defaults.
@@ -1041,5 +1070,32 @@ mod tests {
             panic!("expected content_block_start");
         };
         assert!(matches!(content_block, ContentBlock::ToolUse { name, .. } if name == "bash"));
+    }
+
+    #[test]
+    fn service_tier_json_only_on_official_openai_hosts() {
+        let mut openai = json!({"model": "gpt-4o"});
+        super::apply_service_tier_to_json(
+            "https://api.openai.com/v1",
+            Some("priority"),
+            &mut openai,
+        );
+        assert_eq!(openai["service_tier"], json!("priority"));
+
+        let mut codex = json!({"model": "gpt-5.6-sol"});
+        super::apply_service_tier_to_json(
+            "https://chatgpt.com/backend-api/codex",
+            Some("priority"),
+            &mut codex,
+        );
+        assert_eq!(codex["service_tier"], json!("priority"));
+
+        let mut grok = json!({"model": "grok-4.5"});
+        super::apply_service_tier_to_json("https://api.x.ai/v1", Some("priority"), &mut grok);
+        assert!(grok.get("service_tier").is_none());
+
+        let mut empty = json!({"model": "gpt-4o"});
+        super::apply_service_tier_to_json("https://api.openai.com/v1", None, &mut empty);
+        assert!(empty.get("service_tier").is_none());
     }
 }

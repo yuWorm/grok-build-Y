@@ -513,6 +513,7 @@ pub const PAGER_COMMAND_KEYS: &[&str] = &[
     "exit",
     "expand",
     "export",
+    "fast",
     "feedback",
     "find",
     "fork",

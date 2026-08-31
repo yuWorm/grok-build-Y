@@ -248,6 +248,8 @@ pub struct PagerLocalSnapshot {
     /// Whether Auto (LLM classifier) mode is active on the active agent.
     /// Mutually exclusive with `yolo_mode` in practice (yolo wins); `/auto` reads it so it can toggle off when already on.
     pub auto_mode: bool,
+    /// Session Fast mode (`service_tier=priority`).
+    pub fast_mode: bool,
     /// Currently-selected model's display name, or `None` if no catalog has loaded yet.
     pub current_model_name: Option<String>,
     /// `(display_name, ModelId)` pairs from the active session's catalog.
@@ -297,6 +299,7 @@ impl Default for PagerLocalSnapshot {
             multiline_mode: false,
             yolo_mode: false,
             auto_mode: false,
+            fast_mode: false,
             current_model_name: None,
             available_models: Vec::new(),
             coding_data_sharing_opt_out: true,

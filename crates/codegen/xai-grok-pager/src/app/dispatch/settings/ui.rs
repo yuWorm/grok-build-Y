@@ -72,6 +72,7 @@ pub(crate) fn refresh_open_settings_modals(app: &mut AppView) {
                 multiline_mode: agent.multiline_mode,
                 yolo_mode: agent.session.is_yolo(),
                 auto_mode: agent.session.is_auto(),
+                fast_mode: agent.session.is_fast(),
                 current_model_name: agent.session.models.current_model_name(),
                 available_models: agent
                     .session
@@ -218,6 +219,7 @@ pub(in crate::app::dispatch) fn dispatch_open_settings(
         multiline_mode: agent.multiline_mode,
         yolo_mode: agent.session.is_yolo(),
         auto_mode: agent.session.is_auto(),
+        fast_mode: agent.session.is_fast(),
         current_model_name: agent.session.models.current_model_name(),
         available_models: agent
             .session
@@ -576,7 +578,16 @@ fn agent_yolo_mode(app: &AppView) -> bool {
     false
 }
 
-/// Read the active agent's `auto_mode`. See [`agent_multiline_mode`] for the no-agent fallback rationale.
+/// Read the active agent's Fast mode. See [`agent_multiline_mode`] for the no-agent fallback rationale.
+fn agent_fast_mode(app: &AppView) -> bool {
+    if let ActiveView::Agent(id) = app.active_view
+        && let Some(agent) = app.agents.get(&id)
+    {
+        return agent.session.is_fast();
+    }
+    false
+}
+
 fn agent_auto_mode(app: &AppView) -> bool {
     if let ActiveView::Agent(id) = app.active_view
         && let Some(agent) = app.agents.get(&id)
@@ -644,6 +655,7 @@ pub(crate) fn build_pager_snapshot(app: &AppView) -> crate::settings::PagerLocal
         multiline_mode: agent_multiline_mode(app),
         yolo_mode: agent_yolo_mode(app),
         auto_mode: agent_auto_mode(app),
+        fast_mode: agent_fast_mode(app),
         current_model_name: agent_current_model_name(app),
         available_models: agent_available_models(app),
         coding_data_sharing_opt_out: app.coding_data_retention_opt_out,

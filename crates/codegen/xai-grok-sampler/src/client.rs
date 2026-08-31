@@ -432,6 +432,8 @@ struct ClientDefaults {
     doom_loop_recovery: Option<xai_grok_sampling_types::DoomLoopRecoveryPolicy>,
     /// Claude Pro/Max OAuth fingerprint (Bearer `sk-ant-oat` / oauth beta).
     claude_oauth: bool,
+    /// Session Fast mode (`priority`) for official OpenAI / Codex only.
+    service_tier: Option<String>,
 }
 
 /// Endpoint URL builder, resolved once at client construction so each request
@@ -640,7 +642,14 @@ impl SamplingClient {
         // Apply all extra headers verbatim. This is the single
         // injection point for proxy-auth headers and any other URL- or
         // environment-specific headers the session decides to set.
+        // GROK_COMPAT_HOOK: Fast mode travels as `x-groky-service-tier` and
+        // must not land on the HTTP request (Codex 400s unknown headers).
+        let mut service_tier = None;
         for (key, value) in &config.extra_headers {
+            if key.eq_ignore_ascii_case(crate::compat::GROKY_SERVICE_TIER_HEADER) {
+                service_tier = Some(value.clone());
+                continue;
+            }
             let header_name = HeaderName::try_from(key.as_str())
                 .map_err(|_| SamplingError::InvalidConfiguration("Invalid extra header name"))?;
             let header_value = HeaderValue::from_str(value)
@@ -750,6 +759,7 @@ impl SamplingClient {
             extra_response_includes: config.extra_response_includes,
             doom_loop_recovery: config.doom_loop_recovery,
             claude_oauth,
+            service_tier,
         };
 
         let endpoint = EndpointTemplate::new(&config.base_url, &config.query_params);
@@ -958,6 +968,12 @@ impl SamplingClient {
 
         if request.top_p.is_none() {
             request.top_p = self.defaults.top_p;
+        }
+
+        if request.service_tier.is_none()
+            && crate::compat::official_openai_fast_url(&self.base_url)
+        {
+            request.service_tier = self.defaults.service_tier.clone();
         }
 
         Ok(request)
@@ -1332,6 +1348,11 @@ impl SamplingClient {
         xai_grok_sampling_types::patch_reasoning_text_types(&mut request_body);
         // GROK_COMPAT_HOOK begin
         crate::compat::prepare_codex_request_json(&self.base_url, &mut request_body);
+        crate::compat::apply_service_tier_to_json(
+            &self.base_url,
+            self.defaults.service_tier.as_deref(),
+            &mut request_body,
+        );
         // GROK_COMPAT_HOOK end
         let SentRequest {
             builder,
@@ -1474,6 +1495,11 @@ impl SamplingClient {
         xai_grok_sampling_types::patch_reasoning_text_types(&mut request_body);
         // GROK_COMPAT_HOOK begin
         crate::compat::prepare_codex_request_json(&self.base_url, &mut request_body);
+        crate::compat::apply_service_tier_to_json(
+            &self.base_url,
+            self.defaults.service_tier.as_deref(),
+            &mut request_body,
+        );
         // GROK_COMPAT_HOOK end
         // Fresh per attempt so signals never leak across retries; `None`
         // (check disabled) sends no header and does no peek work per event.
@@ -2442,6 +2468,7 @@ mod tests {
             search_parameters: None,
             response_format: None,
             reasoning_effort: None,
+            service_tier: None,
             x_grok_conv_id: None,
             x_grok_req_id: None,
             x_grok_session_id: None,

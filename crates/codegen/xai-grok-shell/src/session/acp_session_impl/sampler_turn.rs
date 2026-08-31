@@ -716,6 +716,13 @@ impl SessionActor {
         if let Some(id) = vendor_id.as_deref() {
             crate::compat::oauth::inject_request_headers(id, &mut extra_headers);
         }
+        // GROK_COMPAT_HOOK: session Fast mode as a sampler-stripped extra header.
+        if self.fast_mode.get() && crate::compat::url_supports_openai_fast(&cfg.base_url) {
+            extra_headers.insert(
+                crate::compat::GROKY_SERVICE_TIER_HEADER.to_string(),
+                crate::compat::OPENAI_FAST_SERVICE_TIER.to_string(),
+            );
+        }
         crate::agent::config::inject_url_derived_headers(
             &mut extra_headers,
             creds.alpha_test_key.as_deref(),

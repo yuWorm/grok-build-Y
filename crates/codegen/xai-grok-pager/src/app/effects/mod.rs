@@ -2360,6 +2360,25 @@ pub(crate) fn execute(
                     ),
                 );
         }
+        Effect::NotifyFastMode { enabled, session_id } => {
+            let tx = acp_tx.clone();
+            tasks.spawn(async move {
+                let params = serde_json::json!({
+                    "fast_mode": enabled,
+                    "sessionId": session_id.0.to_string(),
+                });
+                let notification = acp::ExtNotification::new(
+                    "x.ai/fast_mode_changed",
+                    serde_json::value::to_raw_value(&params)
+                        .expect("serialize fast_mode_changed params")
+                        .into(),
+                );
+                if let Err(e) = acp_send(notification, &tx).await {
+                    tracing::warn!("Failed to send fast_mode_changed notification: {e}");
+                }
+                TaskResult::FastModeNotified
+            });
+        }
         Effect::PersistSetting { key, value, rollback_value } => {
             tasks
                 .spawn(async move {

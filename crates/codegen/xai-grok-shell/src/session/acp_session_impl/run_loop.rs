@@ -1146,6 +1146,14 @@ pub(super) async fn run_session(
                                 session.emit_event(crate::session::events::Event::YoloToggled { enabled });
                             }
                         }
+                        SessionCommand::SetFastMode { enabled } => {
+                            session.fast_mode.set(enabled);
+                            tracing::info!(
+                                session_id = %session.session_info.id,
+                                enabled,
+                                "Session Fast mode updated"
+                            );
+                        }
                         SessionCommand::SetAutoMode { enabled } => {
                             // Feature gate: a runtime request to enable auto is
                             // honored only when the feature is enabled, so a

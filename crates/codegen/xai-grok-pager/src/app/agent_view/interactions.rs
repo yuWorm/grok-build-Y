@@ -1450,6 +1450,7 @@ mod cancel_turn_mouse_tests {
                 pending_prompts: std::collections::VecDeque::new(),
                 next_queue_id: 0,
                 yolo_mode: false,
+                fast_mode: false,
                 auto_mode: false,
                 prompt_history: Vec::new(),
                 prompt_history_loading: false,

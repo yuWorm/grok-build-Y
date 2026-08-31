@@ -823,6 +823,9 @@ pub(crate) struct SessionActor {
     /// `reconstruct_full_config` threads it into the sampler config, and the
     /// sampler itself sends the matching `x-grok-doom-loop-check` header.
     pub(crate) doom_loop_recovery: Option<xai_grok_sampling_types::DoomLoopRecoveryPolicy>,
+    /// Session Fast mode (`service_tier=priority` on official OpenAI / Codex).
+    /// Pager `/fast`; not persisted. Default off.
+    pub(crate) fast_mode: std::cell::Cell<bool>,
     /// Telemetry-only per-turn detector/recovery tally (deduplicated labels,
     /// attempts, budget-spent accept, tightest recovery trigger). Accumulated
     /// by the event drainer and taken at turn end for analytics events.

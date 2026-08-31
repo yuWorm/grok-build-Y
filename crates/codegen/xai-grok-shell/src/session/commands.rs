@@ -472,6 +472,10 @@ pub enum SessionCommand {
     SetAutoMode {
         enabled: bool,
     },
+    /// Session Fast mode: send OpenAI `service_tier=priority` on official OpenAI / Codex.
+    SetFastMode {
+        enabled: bool,
+    },
     ResetPermissionState,
     Rewind {
         request: RewindRequest,

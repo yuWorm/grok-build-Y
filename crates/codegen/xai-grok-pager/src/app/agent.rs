@@ -679,6 +679,8 @@ pub struct AgentSession {
     /// Whether YOLO mode (auto-approve all permissions) is active.
     /// Read via `is_yolo()`, write via `set_yolo_mode_inner`.
     pub(crate) yolo_mode: bool,
+    /// Session Fast mode (`service_tier=priority` on official OpenAI / Codex).
+    pub(crate) fast_mode: bool,
     /// Whether Auto (LLM classifier) permission mode is active for this session.
     /// Display-only mirror of the applied permission mode, read via `is_auto()`.
     /// Kept in sync wherever the pager applies the mode; mutually exclusive with `yolo_mode` (yolo wins).
@@ -794,6 +796,10 @@ impl AgentSession {
     /// Whether YOLO mode is active. Prefer this over direct field access.
     pub fn is_yolo(&self) -> bool {
         self.yolo_mode
+    }
+    /// Fast mode requested for this session (chip only when the current model can send it).
+    pub fn is_fast(&self) -> bool {
+        self.fast_mode
     }
     /// Whether Auto (LLM classifier) mode is active. Prefer this over direct field access.
     /// Mutually exclusive with `is_yolo()` (yolo wins).
@@ -1101,6 +1107,7 @@ mod tests {
             pending_prompts: VecDeque::new(),
             next_queue_id: 0,
             yolo_mode: false,
+            fast_mode: false,
             auto_mode: false,
             prompt_history: Vec::new(),
             prompt_history_loading: false,

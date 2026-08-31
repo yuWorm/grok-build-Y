@@ -275,6 +275,7 @@ fn build_fork_placeholder(
             pending_prompts: std::collections::VecDeque::new(),
             next_queue_id: 0,
             yolo_mode: app.default_yolo,
+            fast_mode: false,
             auto_mode: inherit_auto_mode(app),
             prompt_history: Vec::new(),
             prompt_history_loading: false,

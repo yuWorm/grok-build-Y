@@ -1313,6 +1313,7 @@ pub(super) fn dispatch_dashboard_dispatch_slash(app: &mut AppView, text: String)
                 yolo_mode: app.default_yolo,
                 auto_mode: app.current_ui.permission_mode.as_deref() == Some("auto")
                     && !app.default_yolo,
+                fast_mode: false,
                 current_model_name: app.models.current_model_name(),
                 available_models: app
                     .models
