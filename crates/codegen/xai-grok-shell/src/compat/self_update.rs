@@ -221,6 +221,8 @@ pub async fn install(target: Option<&str>, force: bool) -> Result<Option<String>
 
     eprintln!("  Downloading groky v{latest} ({asset})...");
     download_file(&url, &tmp).await?;
+    // HTTP download does not keep the Release asset's +x; chmod before exec.
+    chmod_unix_exec(&tmp)?;
     if let Some(sha_url) = sha_url {
         let expected = download_text(&sha_url)
             .await
@@ -237,11 +239,6 @@ pub async fn install(target: Option<&str>, force: bool) -> Result<Option<String>
         }
     }
     smoke_test(&tmp)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&tmp, fs::Permissions::from_mode(0o755))?;
-    }
     if dest.exists() {
         let old = dest.with_extension("old");
         let _ = fs::remove_file(&old);
@@ -254,11 +251,7 @@ pub async fn install(target: Option<&str>, force: bool) -> Result<Option<String>
     } else if let Err(e) = fs::rename(&tmp, &dest) {
         return Err(e.into());
     }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(&dest, fs::Permissions::from_mode(0o755));
-    }
+    let _ = chmod_unix_exec(&dest);
     write_cache(&latest);
     eprintln!("  Installed {}", dest.display());
     Ok(Some(latest))
@@ -497,6 +490,19 @@ fn sha256_file(path: &Path) -> Result<String, SelfUpdateError> {
     Ok(digest.iter().map(|b| format!("{b:02x}")).collect())
 }
 
+fn chmod_unix_exec(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755))?;
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+    Ok(())
+}
+
 fn smoke_test(path: &Path) -> Result<(), SelfUpdateError> {
     let out = std::process::Command::new(path)
         .arg("--version")
@@ -538,6 +544,23 @@ mod tests {
     fn parse_tag_strips_v() {
         assert_eq!(parse_tag("v0.1.5"), "0.1.5");
         assert_eq!(parse_tag("0.1.5"), "0.1.5");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn smoke_test_requires_execute_bit() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("groky-tmp");
+        fs::write(&path, "#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        let err = smoke_test(&path).unwrap_err().to_string();
+        assert!(
+            err.contains("couldn't exec") || err.contains("Permission denied"),
+            "{err}"
+        );
+        chmod_unix_exec(&path).unwrap();
+        smoke_test(&path).expect("chmod +x must happen before --version smoke");
     }
 
     #[test]
