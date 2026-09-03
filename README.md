@@ -9,7 +9,7 @@ plus ChatGPT Codex OAuth.
 
 The CLI binary is **`groky`**. It can sit next to official `grok`.
 
-Latest release: [v0.1.10](https://github.com/yuWorm/groky/releases/tag/v0.1.10)
+Latest release: [v0.1.11](https://github.com/yuWorm/groky/releases/tag/v0.1.11)
 
 ## Install
 
