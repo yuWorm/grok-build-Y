@@ -1,5 +1,3 @@
-//! Environment helpers for benchmarking and testing.
-
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
@@ -69,16 +67,14 @@ fn ensure_local_pager_binary(binary: &std::path::Path) -> Result<()> {
 /// Resolution order:
 /// 1. `PAGER_BINARY` env var (for CI / explicit override)
 /// 2. `CARGO_BIN_EXE_xai-grok-pager` (set by `cargo test`)
-/// 3. Build locally via `cargo build -p xai-grok-pager-bin` (the composition-
-///    root package that owns the `xai-grok-pager` binary)
+/// 3. Build locally via `cargo build -p xai-grok-pager-bin` (the composition-root package that owns the `xai-grok-pager` binary)
 pub fn pager_binary() -> Result<PathBuf> {
     if let Ok(path) = std::env::var("PAGER_BINARY") {
         let p = PathBuf::from(path);
         if !p.exists() {
             bail!("PAGER_BINARY does not exist: {}", p.display());
         }
-        // Bazel sets PAGER_BINARY to a runfiles-relative path; portable_pty
-        // resolves non-absolute paths via PATH lookup instead of the cwd.
+        // Bazel sets PAGER_BINARY to a runfiles-relative path; portable_pty resolves non-absolute paths via PATH lookup instead of the cwd
         return std::path::absolute(&p)
             .with_context(|| format!("failed to absolutize PAGER_BINARY: {}", p.display()));
     }
