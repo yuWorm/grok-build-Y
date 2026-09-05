@@ -1726,8 +1726,10 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
             removed,
             error,
         } => super::vendor::handle_vendor_logout_complete(app, provider_id, removed, error),
-        TaskResult::ModelsDevSynced { count, error } => {
-            super::vendor::handle_models_dev_synced(app, count, error)
-        }
+        TaskResult::ModelsDevSynced {
+            count,
+            vendor_count,
+            error,
+        } => super::vendor::handle_models_dev_synced(app, count, vendor_count, error),
     }
 }

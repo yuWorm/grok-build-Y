@@ -30,6 +30,7 @@ const SHORTCUT_SEARCH: usize = 5;
 const SHORTCUT_ADD: usize = 6;
 const SHORTCUT_SKIP_SYNC: usize = 7;
 const SHORTCUT_TOGGLE_REASONING: usize = 8;
+const SHORTCUT_REFRESH: usize = 9;
 const ADD_CUSTOM_ID: &str = "__add_custom__";
 const PROTOCOLS: &[&str] = &["chat_completions", "responses", "messages"];
 
@@ -404,28 +405,29 @@ impl VendorLoginState {
         let Some(draft) = self.custom.as_mut() else {
             return;
         };
-        let previous: Vec<(String, bool, bool)> = draft
+        let stored: Vec<xai_grok_shell::compat::custom::CustomModel> = draft
             .models
             .iter()
-            .map(|m| (m.api_model.clone(), m.enabled, m.supports_reasoning_effort))
+            .map(CustomModelPick::to_custom_model)
             .collect();
-        let had_prev = !previous.is_empty();
-        draft.models = models
+        let live = models
             .into_iter()
-            .map(|(api_model, name, context_window)| {
-                let prev = previous.iter().find(|(id, _, _)| id == &api_model);
-                let enabled = prev.map(|(_, enabled, _)| *enabled).unwrap_or(!had_prev);
-                let supports_reasoning_effort =
-                    prev.map(|(_, _, reasoning)| *reasoning).unwrap_or_else(|| {
-                        xai_grok_shell::compat::reasoning::model_supports(&api_model)
-                    });
-                CustomModelPick {
+            .map(
+                |(api_model, name, context_window)| xai_grok_shell::compat::custom::RemoteModel {
                     api_model,
                     name,
                     context_window,
-                    supports_reasoning_effort,
-                    enabled,
-                }
+                },
+            )
+            .collect();
+        draft.models = xai_grok_shell::compat::custom::merge_live_models(&stored, live)
+            .into_iter()
+            .map(|m| CustomModelPick {
+                api_model: m.api_model,
+                name: m.name,
+                context_window: m.context_window,
+                supports_reasoning_effort: m.supports_reasoning_effort,
+                enabled: m.enabled,
             })
             .collect();
         draft.selected = 0;
@@ -562,6 +564,8 @@ pub(crate) enum VendorLoginOutcome {
         key: String,
         models: Vec<xai_grok_shell::compat::custom::CustomModel>,
     },
+    /// Re-fetch live `/models` for signed-in vendors (builtin cache + custom).
+    RefreshCatalog,
     Close,
 }
 
@@ -601,12 +605,17 @@ fn modal_config<'a>(
     }
 }
 
-fn pick_shortcuts() -> [Shortcut<'static>; 2] {
+fn pick_shortcuts() -> [Shortcut<'static>; 3] {
     [
         Shortcut {
             label: "Enter select",
             clickable: true,
             id: SHORTCUT_SUBMIT,
+        },
+        Shortcut {
+            label: "r refresh",
+            clickable: true,
+            id: SHORTCUT_REFRESH,
         },
         Shortcut {
             label: "Esc cancel",
@@ -694,6 +703,11 @@ fn step_shortcuts(state: &VendorLoginState) -> Vec<Shortcut<'static>> {
                 id: SHORTCUT_SUBMIT,
             },
             Shortcut {
+                label: if state.probing { "…" } else { "^R refresh" },
+                clickable: !state.probing,
+                id: SHORTCUT_REFRESH,
+            },
+            Shortcut {
                 label: "i add",
                 clickable: !state.probing,
                 id: SHORTCUT_ADD,
@@ -719,8 +733,12 @@ fn step_shortcuts(state: &VendorLoginState) -> Vec<Shortcut<'static>> {
                 id: SHORTCUT_CANCEL,
             },
         ],
+        VendorLoginStep::Pick { .. } => {
+            let [submit, refresh, cancel] = pick_shortcuts();
+            vec![submit, refresh, cancel]
+        }
         _ => {
-            let [submit, cancel] = pick_shortcuts();
+            let [submit, _, cancel] = pick_shortcuts();
             vec![submit, cancel]
         }
     }
@@ -869,6 +887,9 @@ fn handle_oauth_wait_key(state: &mut VendorLoginState, key: &KeyEvent) -> Vendor
 fn handle_pick_key(state: &mut VendorLoginState, key: &KeyEvent) -> VendorLoginOutcome {
     if matches!(key.code, KeyCode::Enter) {
         return confirm_pick(state);
+    }
+    if matches!(key.code, KeyCode::Char('r') | KeyCode::Char('R')) {
+        return VendorLoginOutcome::RefreshCatalog;
     }
     let VendorLoginStep::Pick { selected, scroll } = &mut state.step else {
         return VendorLoginOutcome::Unchanged;
@@ -1047,6 +1068,18 @@ pub(crate) fn handle_vendor_login_mouse(
                     commit_add_model(state)
                 }
                 VendorLoginStep::CustomModels => submit_custom_save(state),
+            };
+        }
+        ModalWindowOutcome::ShortcutActivated(SHORTCUT_REFRESH) => {
+            if state.probing {
+                return VendorLoginOutcome::Unchanged;
+            }
+            return match &state.step {
+                VendorLoginStep::Pick { .. } => VendorLoginOutcome::RefreshCatalog,
+                VendorLoginStep::CustomModels if state.add_model.is_none() => {
+                    submit_custom_sync(state)
+                }
+                _ => VendorLoginOutcome::Unchanged,
             };
         }
         ModalWindowOutcome::ShortcutActivated(SHORTCUT_ADD) => {
@@ -1323,6 +1356,11 @@ fn handle_custom_models_key(state: &mut VendorLoginState, key: &KeyEvent) -> Ven
                 if let Some(draft) = state.custom.as_mut() {
                     draft.set_filtered_enabled(false);
                     return VendorLoginOutcome::Changed;
+                }
+            }
+            KeyCode::Char('r') | KeyCode::Char('R') => {
+                if state.add_model.is_none() {
+                    return submit_custom_sync(state);
                 }
             }
             _ => {}
@@ -2599,8 +2637,6 @@ mod tests {
     fn openrouter_opens_on_method_choice() {
         let mut state = VendorLoginState::for_provider("openrouter".into(), "OpenRouter".into());
         assert!(matches!(state.step, VendorLoginStep::Method { .. }));
-        let out = handle_vendor_login_key(&mut state, &key(KeyCode::Down));
-        assert!(matches!(out, VendorLoginOutcome::Changed));
         let out = handle_vendor_login_key(&mut state, &key(KeyCode::Enter));
         match out {
             VendorLoginOutcome::StartOAuth { provider_id } => {
@@ -2808,7 +2844,7 @@ mod tests {
                 .enabled
         );
         assert!(
-            !draft
+            draft
                 .models
                 .iter()
                 .find(|m| m.api_model == "new")
@@ -2916,6 +2952,59 @@ mod tests {
         let row = &state.custom.as_ref().unwrap().models[0];
         assert!(row.supports_reasoning_effort);
         assert_eq!(row.context_window, 1_050_000);
+    }
+
+    #[test]
+    fn custom_models_ctrl_r_resyncs_and_keeps_manual() {
+        let mut state = VendorLoginState::custom_form();
+        fill_custom_form(&mut state);
+        state.apply_custom_models(
+            vec![
+                ("keep".into(), "Keep".into(), 32_000),
+                ("manual".into(), "Manual".into(), 32_000),
+            ],
+            None,
+        );
+        let _ = handle_vendor_login_key(&mut state, &key(KeyCode::Down));
+        match handle_vendor_login_key(&mut state, &ctrl(KeyCode::Char('r'))) {
+            VendorLoginOutcome::SyncCustom { name, key, .. } => {
+                assert_eq!(name, "Acme");
+                assert_eq!(key, "sk-test");
+            }
+            other => panic!("expected SyncCustom, got {other:?}"),
+        }
+        assert!(state.probing);
+        state.probing = false;
+        state.apply_custom_models(
+            vec![
+                ("keep".into(), "Keep v2".into(), 64_000),
+                ("new".into(), "New".into(), 128_000),
+            ],
+            None,
+        );
+        let draft = state.custom.as_ref().unwrap();
+        let ids: Vec<&str> = draft.models.iter().map(|m| m.api_model.as_str()).collect();
+        assert_eq!(ids, ["keep", "new", "manual"]);
+        assert_eq!(draft.models[0].name, "Keep v2");
+        assert_eq!(draft.models[0].context_window, 64_000);
+        assert!(draft.models[1].enabled);
+        assert!(
+            draft
+                .models
+                .iter()
+                .find(|m| m.api_model == "manual")
+                .unwrap()
+                .enabled
+        );
+    }
+
+    #[test]
+    fn picker_r_refreshes_catalog() {
+        let mut state = VendorLoginState::picker();
+        match handle_vendor_login_key(&mut state, &key(KeyCode::Char('r'))) {
+            VendorLoginOutcome::RefreshCatalog => {}
+            other => panic!("expected RefreshCatalog, got {other:?}"),
+        }
     }
 
     #[test]

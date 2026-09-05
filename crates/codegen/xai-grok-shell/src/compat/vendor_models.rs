@@ -6,6 +6,10 @@
 //! 3. The small hardcoded fallback on `ProviderSpec`
 //!
 //! ChatGPT Codex has no public listing endpoint; it stays on (3).
+//!
+//! Refresh: login, `/sync-models-dev` (also `/refresh-models`), and the
+//! provider-picker `r` shortcut. Custom providers merge into
+//! `vendor-providers.json` on the same path.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -144,6 +148,7 @@ pub async fn refresh_unlocked() -> usize {
             }
         }
     }
+    total += super::custom::refresh_unlocked().await;
     total
 }
 

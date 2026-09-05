@@ -228,18 +228,19 @@ pub(crate) fn execute(
         }
         Effect::SyncModelsDev => {
             tasks.spawn(async move {
-                match xai_grok_shell::compat::reasoning::sync_from_models_dev().await {
-                    Ok(result) => {
-                        let _ = xai_grok_shell::compat::refresh_unlocked_vendor_models().await;
-                        TaskResult::ModelsDevSynced {
-                            count: result.count,
-                            error: None,
-                        }
-                    }
-                    Err(error) => TaskResult::ModelsDevSynced {
-                        count: 0,
-                        error: Some(error.to_string()),
-                    },
+                let (count, error) =
+                    match xai_grok_shell::compat::reasoning::sync_from_models_dev().await {
+                        Ok(result) => (result.count, None),
+                        Err(error) => (0, Some(error.to_string())),
+                    };
+                // GROK_COMPAT_HOOK: live `/models` cache + custom providers,
+                // even when models.dev is unreachable.
+                let vendor_count =
+                    xai_grok_shell::compat::refresh_unlocked_vendor_models().await;
+                TaskResult::ModelsDevSynced {
+                    count,
+                    vendor_count,
+                    error,
                 }
             });
         }

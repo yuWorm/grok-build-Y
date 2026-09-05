@@ -552,11 +552,13 @@ pub(crate) fn provider_is_unlocked(id: &str) -> bool {
 }
 
 pub fn unlocked_provider_ids() -> Vec<String> {
-    PROVIDERS
+    let mut ids: Vec<String> = PROVIDERS
         .iter()
         .filter(|provider| provider_unlocked(provider))
         .map(|provider| provider.id.to_owned())
-        .collect()
+        .collect();
+    ids.extend(crate::compat::custom::unlocked_ids());
+    ids
 }
 
 #[cfg(test)]

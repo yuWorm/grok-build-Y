@@ -55,6 +55,7 @@ fn map_vendor_login_outcome(
             key,
             models,
         }),
+        VendorLoginOutcome::RefreshCatalog => InputOutcome::Action(Action::SyncModelsDev),
     }
 }
 

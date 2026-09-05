@@ -117,6 +117,9 @@ pub fn skip_official_auto_update() -> bool {
     true
 }
 
+/// Product CLI name for user-facing commands and window titles.
+pub const PRODUCT_CLI: &str = "groky";
+
 /// Extra-header key that carries session Fast mode into the sampler.
 /// SamplingClient strips it and never sends it on the wire.
 pub const GROKY_SERVICE_TIER_HEADER: &str = "x-groky-service-tier";

@@ -2285,6 +2285,7 @@ pub enum TaskResult {
     /// `/sync-models-dev` finished.
     ModelsDevSynced {
         count: usize,
+        vendor_count: usize,
         error: Option<String>,
     },
     /// A `command` status line finished.

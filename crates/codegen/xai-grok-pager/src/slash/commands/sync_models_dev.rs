@@ -11,11 +11,11 @@ impl SlashCommand for SyncModelsDevCommand {
     }
 
     fn aliases(&self) -> &[&str] {
-        &["sync-models"]
+        &["sync-models", "refresh-models"]
     }
 
     fn description(&self) -> &str {
-        "Refresh vendor model lists, reasoning menus, and context windows"
+        "Refresh vendor and custom provider model lists, reasoning menus, and context windows"
     }
 
     fn usage(&self) -> &str {
@@ -35,7 +35,7 @@ mod tests {
     fn sync_models_dev_metadata() {
         let cmd = SyncModelsDevCommand;
         assert_eq!(cmd.name(), "sync-models-dev");
-        assert_eq!(cmd.aliases(), &["sync-models"]);
+        assert_eq!(cmd.aliases(), &["sync-models", "refresh-models"]);
         assert!(!cmd.takes_args());
     }
 }

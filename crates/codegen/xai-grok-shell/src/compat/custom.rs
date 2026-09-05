@@ -611,6 +611,124 @@ pub fn merge_one(resolved: &mut IndexMap<String, ModelEntry>, provider: &CustomP
     }
 }
 
+/// Merge a live `/models` listing into a stored custom-provider list.
+///
+/// Existing rows keep `enabled` and `supports_reasoning_effort`. New live
+/// rows are enabled. Manual rows that the endpoint does not return are kept.
+pub fn merge_live_models(stored: &[CustomModel], live: Vec<RemoteModel>) -> Vec<CustomModel> {
+    let stored_by_id: std::collections::HashMap<&str, &CustomModel> =
+        stored.iter().map(|m| (m.api_model.as_str(), m)).collect();
+    let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for model in live {
+        let api_model = model.api_model.trim();
+        if api_model.is_empty() || !seen.insert(api_model.to_owned()) {
+            continue;
+        }
+        let prev = stored_by_id.get(api_model).copied();
+        let name = if model.name.trim().is_empty() || model.name == model.api_model {
+            prev.filter(|m| !m.name.is_empty())
+                .map(|m| m.name.clone())
+                .unwrap_or_else(|| model.api_model.clone())
+        } else {
+            model.name
+        };
+        out.push(CustomModel {
+            api_model: api_model.to_owned(),
+            name,
+            context_window: model.context_window,
+            supports_reasoning_effort: prev
+                .map(|m| m.supports_reasoning_effort)
+                .unwrap_or_else(|| crate::compat::reasoning::model_supports(api_model)),
+            enabled: prev.map(|m| m.enabled).unwrap_or(true),
+        });
+    }
+    for model in stored {
+        if seen.contains(model.api_model.as_str()) {
+            continue;
+        }
+        out.push(model.clone());
+    }
+    out
+}
+
+/// Signed-in custom provider ids (empty in unit tests).
+pub fn unlocked_ids() -> Vec<String> {
+    #[cfg(test)]
+    {
+        Vec::new()
+    }
+    #[cfg(not(test))]
+    {
+        let Ok(store) = CustomProviderStore::default_store() else {
+            return Vec::new();
+        };
+        let auth = VendorAuthStore::default_store().ok();
+        store
+            .list()
+            .filter(|p| auth.as_ref().is_some_and(|s| s.has_provider(&p.id)))
+            .map(|p| p.id.clone())
+            .collect()
+    }
+}
+
+/// Re-fetch `/models` for a saved custom provider and merge into
+/// `vendor-providers.json`. GROK_COMPAT_HOOK.
+pub async fn refresh(provider_id: &str) -> Result<usize, VendorLoginError> {
+    #[cfg(test)]
+    {
+        let _ = provider_id;
+        return Ok(0);
+    }
+    #[cfg(not(test))]
+    {
+        let mut catalog = CustomProviderStore::default_store()?;
+        let Some(mut provider) = catalog.get(provider_id).cloned() else {
+            return Ok(0);
+        };
+        let key = stored_secret(provider_id).unwrap_or_default();
+        let listed = fetch_model_list(
+            &provider.base_url,
+            &key,
+            provider.auth_scheme(),
+            provider.anthropic_version.as_deref(),
+        )
+        .await?;
+        if listed.is_empty() {
+            return Ok(0);
+        }
+        let n = listed.len();
+        provider.models = merge_live_models(&provider.models, listed);
+        catalog.upsert(provider)?;
+        Ok(n)
+    }
+}
+
+/// Refresh every signed-in custom provider's live model list.
+pub async fn refresh_unlocked() -> usize {
+    #[cfg(test)]
+    {
+        0
+    }
+    #[cfg(not(test))]
+    {
+        let mut total = 0;
+        for id in unlocked_ids() {
+            match refresh(&id).await {
+                Ok(n) => total += n,
+                Err(error) => {
+                    tracing::warn!(
+                        provider = %id,
+                        error = %error,
+                        "custom provider model list refresh failed"
+                    );
+                }
+            }
+        }
+        total
+    }
+}
+
 pub fn acp_models_for_custom(
     provider_id: &str,
 ) -> IndexMap<agent_client_protocol::ModelId, agent_client_protocol::ModelInfo> {
@@ -626,8 +744,9 @@ pub fn acp_models_for_custom(
 #[cfg(test)]
 mod tests {
     use super::{
-        CustomModel, CustomProvider, CustomProviderStore, merge_one, models_endpoint_candidates,
-        parse_models_json, slugify, vendor_model_display_name,
+        CustomModel, CustomProvider, CustomProviderStore, RemoteModel, merge_live_models,
+        merge_one, models_endpoint_candidates, parse_models_json, slugify,
+        vendor_model_display_name,
     };
     use indexmap::IndexMap;
     use xai_grok_sampling_types::ApiBackend;
@@ -676,6 +795,52 @@ mod tests {
         assert_eq!(models.len(), 2);
         assert_eq!(models[0].api_model, "alpha");
         assert_eq!(models[1].name, "Beta");
+    }
+
+    fn stored(id: &str, name: &str, enabled: bool, reasoning: bool) -> CustomModel {
+        CustomModel {
+            api_model: id.into(),
+            name: name.into(),
+            context_window: 32_000,
+            supports_reasoning_effort: reasoning,
+            enabled,
+        }
+    }
+
+    fn live(id: &str, name: &str, ctx: u64) -> RemoteModel {
+        RemoteModel {
+            api_model: id.into(),
+            name: name.into(),
+            context_window: ctx,
+        }
+    }
+
+    #[test]
+    fn merge_live_keeps_flags_adds_new_and_retains_manual() {
+        let stored = vec![
+            stored("keep", "Keep", true, true),
+            stored("off", "Off", false, false),
+            stored("manual", "Manual", true, false),
+        ];
+        let merged = merge_live_models(
+            &stored,
+            vec![
+                live("keep", "Keep v2", 64_000),
+                live("off", "Off", 32_000),
+                live("new", "New", 128_000),
+            ],
+        );
+        assert_eq!(merged.len(), 4);
+        assert_eq!(merged[0].api_model, "keep");
+        assert_eq!(merged[0].name, "Keep v2");
+        assert_eq!(merged[0].context_window, 64_000);
+        assert!(merged[0].enabled);
+        assert!(merged[0].supports_reasoning_effort);
+        assert!(!merged[1].enabled);
+        assert_eq!(merged[2].api_model, "new");
+        assert!(merged[2].enabled);
+        assert_eq!(merged[3].api_model, "manual");
+        assert!(merged[3].enabled);
     }
 
     #[test]

@@ -64,6 +64,7 @@ fn map_vendor_login_outcome(outcome: VendorLoginOutcome) -> InputOutcome {
             key,
             models,
         }),
+        VendorLoginOutcome::RefreshCatalog => InputOutcome::Action(Action::SyncModelsDev),
     }
 }
 
@@ -256,12 +257,9 @@ pub(super) fn dispatch_sync_models_dev(app: &mut AppView) -> Vec<Effect> {
 pub(super) fn handle_models_dev_synced(
     app: &mut AppView,
     count: usize,
+    vendor_count: usize,
     error: Option<String>,
 ) -> Vec<Effect> {
-    if let Some(err) = error {
-        app.show_toast(&format!("models.dev sync failed: {err}"));
-        return vec![];
-    }
     for provider_id in xai_grok_shell::compat::unlocked_provider_ids() {
         inject_provider_models(app, &provider_id);
     }
@@ -269,7 +267,14 @@ pub(super) fn handle_models_dev_synced(
     for agent in app.agents.values_mut() {
         patch_model_state_reasoning(&mut agent.session.models);
     }
-    app.show_toast(&format!("Synced {count} models from models.dev"));
+    let toast = match (error.as_deref(), vendor_count) {
+        (Some(err), 0) => format!("Model list refresh failed: {err}"),
+        (Some(err), _) => {
+            format!("Refreshed vendor model lists; models.dev failed: {err}")
+        }
+        (None, _) => format!("Refreshed model lists ({count} from models.dev)"),
+    };
+    app.show_toast(&toast);
     vec![]
 }
 
