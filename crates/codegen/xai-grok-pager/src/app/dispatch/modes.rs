@@ -411,19 +411,11 @@ pub(super) fn set_fast_mode(app: &mut AppView, new: bool) -> Vec<Effect> {
         return vec![];
     };
     if agent.session.fast_mode == new {
-        app.show_toast(if new {
-            "Fast mode on"
-        } else {
-            "Fast mode off"
-        });
+        app.show_toast(if new { "Fast mode on" } else { "Fast mode off" });
         return vec![];
     }
     agent.session.fast_mode = new;
-    app.show_toast(if new {
-        "Fast mode on"
-    } else {
-        "Fast mode off"
-    });
+    app.show_toast(if new { "Fast mode on" } else { "Fast mode off" });
     vec![Effect::NotifyFastMode {
         enabled: new,
         session_id,

@@ -129,14 +129,25 @@ fn catalog_id_is_provider(model_id: &str, provider: &str) -> bool {
     model_id == provider || model_id.starts_with(&format!("{provider}/"))
 }
 
-/// Catalog ids for official OpenAI Chat Completions (`openai/…`) and Codex (`openai-codex/…`).
+fn is_gpt_wire_id(model_id: &str) -> bool {
+    let wire = model_id.rsplit('/').next().unwrap_or(model_id);
+    let lower = wire.to_ascii_lowercase();
+    lower == "gpt" || lower.starts_with("gpt-")
+}
+
+/// Official `openai/…` and `openai-codex/…`, plus any GPT wire id (`gpt-4o`,
+/// `acme/gpt-5`, `openrouter/openai/gpt-4o`). Custom OpenAI-compatible GPT
+/// models use this.
 pub fn model_supports_openai_fast(model_id: &str) -> bool {
     OPENAI_FAST_PROVIDERS
         .iter()
         .any(|provider| catalog_id_is_provider(model_id, provider))
+        || is_gpt_wire_id(model_id)
 }
 
-/// Only the official OpenAI and ChatGPT Codex endpoints accept `service_tier`.
+/// Official OpenAI and ChatGPT Codex hosts. Custom GPT Fast uses the model
+/// gate instead; this stays host-only so a Claude row on the same relay URL
+/// does not inherit `service_tier`.
 pub fn url_supports_openai_fast(base_url: &str) -> bool {
     matches!(
         vendor_id_for_base_url(base_url).as_deref(),
@@ -247,12 +258,23 @@ mod tests {
     #[test]
     fn official_openai_and_codex_models_support_fast() {
         assert!(super::model_supports_openai_fast("openai/gpt-4o"));
-        assert!(super::model_supports_openai_fast("openai-codex/gpt-5.6-sol"));
+        assert!(super::model_supports_openai_fast(
+            "openai-codex/gpt-5.6-sol"
+        ));
         assert!(super::model_supports_openai_fast("openai"));
-        assert!(!super::model_supports_openai_fast("openai-foo/gpt-4o"));
-        assert!(!super::model_supports_openai_fast("openrouter/openai/gpt-4o"));
+        assert!(super::model_supports_openai_fast("gpt-4o"));
+        assert!(super::model_supports_openai_fast("acme/gpt-5"));
+        assert!(super::model_supports_openai_fast(
+            "openrouter/openai/gpt-4o"
+        ));
+        assert!(!super::model_supports_openai_fast(
+            "openai-foo/claude-opus-4"
+        ));
         assert!(!super::model_supports_openai_fast("grok-4.5"));
-        assert!(!super::model_supports_openai_fast("anthropic/claude-opus-5"));
+        assert!(!super::model_supports_openai_fast(
+            "anthropic/claude-opus-5"
+        ));
+        assert!(!super::model_supports_openai_fast("acme/claude-sonnet-4"));
     }
 
     #[test]
@@ -265,7 +287,9 @@ mod tests {
         assert!(!super::url_supports_openai_fast(
             "https://openrouter.ai/api/v1"
         ));
-        assert!(!super::url_supports_openai_fast("http://localhost:11434/v1"));
+        assert!(!super::url_supports_openai_fast(
+            "http://localhost:11434/v1"
+        ));
     }
 
     #[test]

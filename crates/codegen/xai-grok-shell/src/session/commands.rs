@@ -431,7 +431,7 @@ pub enum SessionCommand {
     SetAutoMode {
         enabled: bool,
     },
-    /// Session Fast mode: send OpenAI `service_tier=priority` on official OpenAI / Codex.
+    /// Session Fast mode: send OpenAI `service_tier=priority` on GPT models and official OpenAI / Codex.
     SetFastMode {
         enabled: bool,
     },

@@ -593,8 +593,11 @@ pub fn merge_one(resolved: &mut IndexMap<String, ModelEntry>, provider: &CustomP
         info.context_window = NonZeroU64::new(spec.context_window).unwrap_or(info.context_window);
         info.supported_in_api = true;
         info.user_selectable = true;
-        info.supports_reasoning_effort = spec.supports_reasoning_effort;
-        crate::compat::reasoning::apply_to_model_info(&mut info, &spec.api_model);
+        crate::compat::reasoning::apply_custom_model_meta(
+            &mut info,
+            &spec.api_model,
+            spec.supports_reasoning_effort,
+        );
         resolved.insert(
             key,
             ModelEntry {
@@ -770,7 +773,7 @@ mod tests {
                 api_model: "gpt-5.6-sol".into(),
                 name: "GPT-5.6 Sol".into(),
                 context_window: 400_000,
-                supports_reasoning_effort: false,
+                supports_reasoning_effort: true,
                 enabled: true,
             }],
         };
@@ -781,5 +784,55 @@ mod tests {
         assert!(!info.reasoning_efforts.is_empty());
         assert_eq!(info.context_window.get(), 1_050_000);
         assert_eq!(info.max_completion_tokens, Some(128_000));
+    }
+
+    #[test]
+    fn merge_one_user_off_strips_models_dev_reasoning() {
+        let provider = CustomProvider {
+            id: "openai".into(),
+            name: "OpenAI".into(),
+            base_url: "https://api.openai.com/v1".into(),
+            api_backend: "chat_completions".into(),
+            auth_scheme: "bearer".into(),
+            anthropic_version: None,
+            models: vec![CustomModel {
+                api_model: "gpt-5.6-sol".into(),
+                name: "GPT-5.6 Sol".into(),
+                context_window: 400_000,
+                supports_reasoning_effort: false,
+                enabled: true,
+            }],
+        };
+        let mut resolved = IndexMap::new();
+        merge_one(&mut resolved, &provider);
+        let info = &resolved.get("openai/gpt-5.6-sol").unwrap().info;
+        assert!(!info.supports_reasoning_effort);
+        assert!(info.reasoning_efforts.is_empty());
+        assert_eq!(info.context_window.get(), 1_050_000);
+    }
+
+    #[test]
+    fn merge_one_unknown_model_keeps_manual_reasoning_menu() {
+        let provider = CustomProvider {
+            id: "acme".into(),
+            name: "Acme".into(),
+            base_url: "https://acme.example/v1".into(),
+            api_backend: "chat_completions".into(),
+            auth_scheme: "bearer".into(),
+            anthropic_version: None,
+            models: vec![CustomModel {
+                api_model: "proxy-mystery-v1".into(),
+                name: "Mystery".into(),
+                context_window: 64_000,
+                supports_reasoning_effort: true,
+                enabled: true,
+            }],
+        };
+        let mut resolved = IndexMap::new();
+        merge_one(&mut resolved, &provider);
+        let info = &resolved.get("acme/proxy-mystery-v1").unwrap().info;
+        assert!(info.supports_reasoning_effort);
+        assert_eq!(info.reasoning_efforts.len(), 3);
+        assert_eq!(info.context_window.get(), 64_000);
     }
 }

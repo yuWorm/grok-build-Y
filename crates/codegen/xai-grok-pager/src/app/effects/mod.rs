@@ -212,18 +212,7 @@ pub(crate) fn execute(
                     api_backend,
                     auth_scheme,
                     anthropic_version,
-                    models: models
-                        .into_iter()
-                        .map(|(api_model, name, context_window, enabled)| {
-                            xai_grok_shell::compat::custom::CustomModel {
-                                api_model: api_model.clone(),
-                                name,
-                                context_window,
-                                supports_reasoning_effort: xai_grok_shell::compat::reasoning::model_supports(&api_model),
-                                enabled,
-                            }
-                        })
-                        .collect(),
+                    models,
                 };
                 match xai_grok_shell::compat::custom::save_custom_provider(spec, &key) {
                     Ok(()) => TaskResult::VendorCustomSaved {

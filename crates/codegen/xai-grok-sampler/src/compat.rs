@@ -130,16 +130,14 @@ pub(crate) fn is_codex_responses_url(base_url: &str) -> bool {
     base_url.contains("chatgpt.com/backend-api/codex")
 }
 
-fn is_openai_api_url(base_url: &str) -> bool {
-    base_url.contains("api.openai.com")
+pub(crate) fn allows_openai_service_tier(base_url: &str) -> bool {
+    let lower = base_url.to_ascii_lowercase();
+    !lower.contains("api.x.ai") && !lower.contains("api.anthropic.com")
 }
 
-/// Official OpenAI Chat Completions or ChatGPT Codex — the only hosts that get `service_tier`.
-pub(crate) fn official_openai_fast_url(base_url: &str) -> bool {
-    is_codex_responses_url(base_url) || is_openai_api_url(base_url)
-}
-
-/// GROK_COMPAT_HOOK: set `service_tier` on official OpenAI / Codex JSON bodies.
+/// GROK_COMPAT_HOOK: set `service_tier` on OpenAI-compatible JSON bodies.
+/// Official hosts and OpenAI-compatible relays both get it; xAI / Anthropic
+/// official APIs do not.
 pub(crate) fn apply_service_tier_to_json(
     base_url: &str,
     service_tier: Option<&str>,
@@ -148,7 +146,7 @@ pub(crate) fn apply_service_tier_to_json(
     let Some(tier) = service_tier.filter(|s| !s.is_empty()) else {
         return;
     };
-    if !official_openai_fast_url(base_url) {
+    if !allows_openai_service_tier(base_url) {
         return;
     }
     if let Some(obj) = body.as_object_mut() {
@@ -1073,7 +1071,7 @@ mod tests {
     }
 
     #[test]
-    fn service_tier_json_only_on_official_openai_hosts() {
+    fn service_tier_json_on_openai_compatible_hosts() {
         let mut openai = json!({"model": "gpt-4o"});
         super::apply_service_tier_to_json(
             "https://api.openai.com/v1",
@@ -1090,9 +1088,21 @@ mod tests {
         );
         assert_eq!(codex["service_tier"], json!("priority"));
 
+        let mut proxy = json!({"model": "gpt-4o"});
+        super::apply_service_tier_to_json("https://relay.example/v1", Some("priority"), &mut proxy);
+        assert_eq!(proxy["service_tier"], json!("priority"));
+
         let mut grok = json!({"model": "grok-4.5"});
         super::apply_service_tier_to_json("https://api.x.ai/v1", Some("priority"), &mut grok);
         assert!(grok.get("service_tier").is_none());
+
+        let mut anthropic = json!({"model": "claude-sonnet-4"});
+        super::apply_service_tier_to_json(
+            "https://api.anthropic.com/v1",
+            Some("priority"),
+            &mut anthropic,
+        );
+        assert!(anthropic.get("service_tier").is_none());
 
         let mut empty = json!({"model": "gpt-4o"});
         super::apply_service_tier_to_json("https://api.openai.com/v1", None, &mut empty);

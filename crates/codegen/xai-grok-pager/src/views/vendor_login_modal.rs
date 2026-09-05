@@ -27,6 +27,9 @@ const SHORTCUT_CANCEL: usize = 2;
 const SHORTCUT_SELECT_ALL: usize = 3;
 const SHORTCUT_SELECT_NONE: usize = 4;
 const SHORTCUT_SEARCH: usize = 5;
+const SHORTCUT_ADD: usize = 6;
+const SHORTCUT_SKIP_SYNC: usize = 7;
+const SHORTCUT_TOGGLE_REASONING: usize = 8;
 const ADD_CUSTOM_ID: &str = "__add_custom__";
 const PROTOCOLS: &[&str] = &["chat_completions", "responses", "messages"];
 
@@ -59,7 +62,86 @@ struct CustomModelPick {
     api_model: String,
     name: String,
     context_window: u64,
+    supports_reasoning_effort: bool,
     enabled: bool,
+}
+
+impl CustomModelPick {
+    fn to_custom_model(&self) -> xai_grok_shell::compat::custom::CustomModel {
+        xai_grok_shell::compat::custom::CustomModel {
+            api_model: self.api_model.clone(),
+            name: self.name.clone(),
+            context_window: self.context_window,
+            supports_reasoning_effort: self.supports_reasoning_effort,
+            enabled: self.enabled,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AddModelField {
+    ApiModel,
+    Name,
+    Reasoning,
+}
+
+#[derive(Debug)]
+struct AddModelDraft {
+    api_model: LineEditor,
+    name: LineEditor,
+    field: AddModelField,
+    supports_reasoning_effort: bool,
+    context_window: u64,
+    matched: bool,
+    reasoning_touched: bool,
+    error: Option<String>,
+}
+
+impl AddModelDraft {
+    fn new() -> Self {
+        Self {
+            api_model: LineEditor::default(),
+            name: LineEditor::default(),
+            field: AddModelField::ApiModel,
+            supports_reasoning_effort: false,
+            context_window: 128_000,
+            matched: false,
+            reasoning_touched: false,
+            error: None,
+        }
+    }
+
+    fn active_editor_mut(&mut self) -> Option<&mut LineEditor> {
+        match self.field {
+            AddModelField::ApiModel => Some(&mut self.api_model),
+            AddModelField::Name => Some(&mut self.name),
+            AddModelField::Reasoning => None,
+        }
+    }
+
+    fn cycle_field(&mut self, forward: bool) {
+        self.field = match (self.field, forward) {
+            (AddModelField::ApiModel, true) | (AddModelField::Reasoning, false) => {
+                AddModelField::Name
+            }
+            (AddModelField::Name, true) | (AddModelField::ApiModel, false) => {
+                AddModelField::Reasoning
+            }
+            (AddModelField::Reasoning, true) | (AddModelField::Name, false) => {
+                AddModelField::ApiModel
+            }
+        };
+    }
+
+    fn refresh_suggestion(&mut self) {
+        let suggested =
+            xai_grok_shell::compat::reasoning::suggest_model(self.api_model.text().trim());
+        self.context_window = suggested.context_window;
+        self.matched = suggested.matched;
+        if !self.reasoning_touched {
+            self.supports_reasoning_effort = suggested.supports_reasoning_effort;
+        }
+    }
 }
 
 impl CustomDraft {
@@ -101,6 +183,7 @@ impl CustomDraft {
                 api_model: m.api_model.clone(),
                 name: m.name.clone(),
                 context_window: m.context_window,
+                supports_reasoning_effort: m.supports_reasoning_effort,
                 enabled: m.enabled,
             })
             .collect();
@@ -231,6 +314,7 @@ pub(crate) struct VendorLoginState {
     /// Screen Y → provider index, rebuilt each pick-step frame.
     row_map: Vec<(u16, usize)>,
     custom: Option<CustomDraft>,
+    add_model: Option<AddModelDraft>,
 }
 
 impl VendorLoginState {
@@ -247,6 +331,7 @@ impl VendorLoginState {
             content_area: None,
             row_map: Vec::new(),
             custom: None,
+            add_model: None,
         }
     }
 
@@ -305,9 +390,13 @@ impl VendorLoginState {
         error: Option<String>,
     ) {
         self.probing = false;
+        self.add_model = None;
+        if self.custom.is_none() {
+            self.custom = Some(CustomDraft::new());
+        }
         if let Some(err) = error {
             self.error = Some(err);
-            self.step = VendorLoginStep::CustomForm;
+            self.step = VendorLoginStep::CustomModels;
             return;
         }
         self.error = None;
@@ -315,24 +404,26 @@ impl VendorLoginState {
         let Some(draft) = self.custom.as_mut() else {
             return;
         };
-        let previous: Vec<(String, bool)> = draft
+        let previous: Vec<(String, bool, bool)> = draft
             .models
             .iter()
-            .map(|m| (m.api_model.clone(), m.enabled))
+            .map(|m| (m.api_model.clone(), m.enabled, m.supports_reasoning_effort))
             .collect();
         let had_prev = !previous.is_empty();
         draft.models = models
             .into_iter()
             .map(|(api_model, name, context_window)| {
-                let enabled = previous
-                    .iter()
-                    .find(|(id, _)| id == &api_model)
-                    .map(|(_, enabled)| *enabled)
-                    .unwrap_or(!had_prev);
+                let prev = previous.iter().find(|(id, _, _)| id == &api_model);
+                let enabled = prev.map(|(_, enabled, _)| *enabled).unwrap_or(!had_prev);
+                let supports_reasoning_effort =
+                    prev.map(|(_, _, reasoning)| *reasoning).unwrap_or_else(|| {
+                        xai_grok_shell::compat::reasoning::model_supports(&api_model)
+                    });
                 CustomModelPick {
                     api_model,
                     name,
                     context_window,
+                    supports_reasoning_effort,
                     enabled,
                 }
             })
@@ -357,6 +448,7 @@ impl VendorLoginState {
 
     fn enter_custom_form(&mut self) {
         self.custom = Some(CustomDraft::new());
+        self.add_model = None;
         self.step = VendorLoginStep::CustomForm;
         self.error = None;
         self.probing = false;
@@ -371,6 +463,7 @@ impl VendorLoginState {
         let key = xai_grok_shell::compat::custom::stored_secret(provider_id).unwrap_or_default();
         let has_models = !provider.models.is_empty();
         self.custom = Some(CustomDraft::from_provider(provider, &key));
+        self.add_model = None;
         self.step = if has_models {
             VendorLoginStep::CustomModels
         } else {
@@ -467,7 +560,7 @@ pub(crate) enum VendorLoginOutcome {
         api_backend: String,
         auth_scheme: String,
         key: String,
-        models: Vec<(String, String, u64, bool)>,
+        models: Vec<xai_grok_shell::compat::custom::CustomModel>,
     },
     Close,
 }
@@ -567,6 +660,28 @@ fn step_shortcuts(state: &VendorLoginState) -> Vec<Shortcut<'static>> {
                 id: SHORTCUT_SUBMIT,
             },
             Shortcut {
+                label: "^Enter skip",
+                clickable: !state.probing,
+                id: SHORTCUT_SKIP_SYNC,
+            },
+            Shortcut {
+                label: "Esc back",
+                clickable: true,
+                id: SHORTCUT_CANCEL,
+            },
+        ],
+        VendorLoginStep::CustomModels if state.add_model.is_some() => vec![
+            Shortcut {
+                label: "Enter add",
+                clickable: true,
+                id: SHORTCUT_SUBMIT,
+            },
+            Shortcut {
+                label: "Space reasoning",
+                clickable: true,
+                id: SHORTCUT_TOGGLE_REASONING,
+            },
+            Shortcut {
                 label: "Esc back",
                 clickable: true,
                 id: SHORTCUT_CANCEL,
@@ -577,6 +692,11 @@ fn step_shortcuts(state: &VendorLoginState) -> Vec<Shortcut<'static>> {
                 label: if state.probing { "…" } else { "Enter save" },
                 clickable: !state.probing,
                 id: SHORTCUT_SUBMIT,
+            },
+            Shortcut {
+                label: "i add",
+                clickable: !state.probing,
+                id: SHORTCUT_ADD,
             },
             Shortcut {
                 label: "^A all",
@@ -623,6 +743,11 @@ pub(crate) fn handle_vendor_login_key(
     }
 
     if matches!(key.code, KeyCode::Esc) {
+        if state.add_model.is_some() {
+            state.add_model = None;
+            state.error = None;
+            return VendorLoginOutcome::Changed;
+        }
         match &state.step {
             VendorLoginStep::Key {
                 from_picker: true, ..
@@ -801,6 +926,21 @@ pub(crate) fn handle_vendor_login_paste(
         return VendorLoginOutcome::Unchanged;
     }
     if matches!(state.step, VendorLoginStep::CustomModels) {
+        if let Some(add) = state.add_model.as_mut() {
+            let Some(editor) = add.active_editor_mut() else {
+                return VendorLoginOutcome::Unchanged;
+            };
+            match editor.insert_paste(text) {
+                LineEditOutcome::Unhandled | LineEditOutcome::HandledNoChange => {
+                    return VendorLoginOutcome::Unchanged;
+                }
+                _ => {
+                    add.refresh_suggestion();
+                    add.error = None;
+                    return VendorLoginOutcome::Changed;
+                }
+            }
+        }
         let pasted = state.custom.as_mut().and_then(|draft| {
             if !draft.search_focused {
                 return None;
@@ -848,6 +988,11 @@ pub(crate) fn handle_vendor_login_mouse(
     match chrome {
         ModalWindowOutcome::CloseRequested => return VendorLoginOutcome::Close,
         ModalWindowOutcome::ShortcutActivated(SHORTCUT_CANCEL) => {
+            if state.add_model.is_some() {
+                state.add_model = None;
+                state.error = None;
+                return VendorLoginOutcome::Changed;
+            }
             if !state.probing {
                 match &state.step {
                     VendorLoginStep::Key {
@@ -898,8 +1043,32 @@ pub(crate) fn handle_vendor_login_mouse(
                 VendorLoginStep::Key { .. } => submit_key(state),
                 VendorLoginStep::OAuthWait { .. } => submit_oauth_code(state),
                 VendorLoginStep::CustomForm => submit_custom_sync(state),
+                VendorLoginStep::CustomModels if state.add_model.is_some() => {
+                    commit_add_model(state)
+                }
                 VendorLoginStep::CustomModels => submit_custom_save(state),
             };
+        }
+        ModalWindowOutcome::ShortcutActivated(SHORTCUT_ADD) => {
+            if state.probing {
+                return VendorLoginOutcome::Unchanged;
+            }
+            return open_add_model(state);
+        }
+        ModalWindowOutcome::ShortcutActivated(SHORTCUT_SKIP_SYNC) => {
+            if state.probing {
+                return VendorLoginOutcome::Unchanged;
+            }
+            return skip_to_custom_models(state);
+        }
+        ModalWindowOutcome::ShortcutActivated(SHORTCUT_TOGGLE_REASONING) => {
+            if let Some(add) = state.add_model.as_mut() {
+                add.supports_reasoning_effort = !add.supports_reasoning_effort;
+                add.reasoning_touched = true;
+                add.field = AddModelField::Reasoning;
+                return VendorLoginOutcome::Changed;
+            }
+            return toggle_selected_reasoning(state);
         }
         ModalWindowOutcome::ShortcutActivated(SHORTCUT_SELECT_ALL) => {
             if state.probing {
@@ -946,6 +1115,10 @@ pub(crate) fn handle_vendor_login_mouse(
         && column < area.x + area.width
         && row >= area.y
         && row < area.y + area.height;
+
+    if state.add_model.is_some() {
+        return VendorLoginOutcome::Unchanged;
+    }
 
     if matches!(kind, MouseEventKind::Down(MouseButton::Left)) && in_content {
         if matches!(state.step, VendorLoginStep::CustomModels) && row == area.y {
@@ -1084,6 +1257,9 @@ fn confirm_pick(state: &mut VendorLoginState) -> VendorLoginOutcome {
 
 fn handle_custom_form_key(state: &mut VendorLoginState, key: &KeyEvent) -> VendorLoginOutcome {
     if matches!(key.code, KeyCode::Enter) {
+        if key.modifiers.contains(KeyModifiers::CONTROL) {
+            return skip_to_custom_models(state);
+        }
         return submit_custom_sync(state);
     }
     let outcome = {
@@ -1132,6 +1308,9 @@ fn handle_custom_form_key(state: &mut VendorLoginState, key: &KeyEvent) -> Vendo
 }
 
 fn handle_custom_models_key(state: &mut VendorLoginState, key: &KeyEvent) -> VendorLoginOutcome {
+    if state.add_model.is_some() {
+        return handle_add_model_key(state, key);
+    }
     if key.modifiers.contains(KeyModifiers::CONTROL) {
         match key.code {
             KeyCode::Char('a') | KeyCode::Char('A') => {
@@ -1183,6 +1362,12 @@ fn handle_custom_models_key(state: &mut VendorLoginState, key: &KeyEvent) -> Ven
 
     if matches!(key.code, KeyCode::Enter) {
         return submit_custom_save(state);
+    }
+    if matches!(key.code, KeyCode::Char('i') | KeyCode::Char('+')) {
+        return open_add_model(state);
+    }
+    if matches!(key.code, KeyCode::Char('r')) {
+        return toggle_selected_reasoning(state);
     }
     let Some(draft) = state.custom.as_mut() else {
         return VendorLoginOutcome::Unchanged;
@@ -1260,6 +1445,142 @@ fn submit_custom_sync(state: &mut VendorLoginState) -> VendorLoginOutcome {
     }
 }
 
+fn skip_to_custom_models(state: &mut VendorLoginState) -> VendorLoginOutcome {
+    let Some(draft) = state.custom.as_ref() else {
+        return VendorLoginOutcome::Unchanged;
+    };
+    let name = draft.name.text().trim().to_owned();
+    let base_url = draft.base_url.text().trim().to_owned();
+    if name.is_empty() || base_url.len() < 8 {
+        state.error = Some("Name and base URL are required".into());
+        return VendorLoginOutcome::Changed;
+    }
+    state.probing = false;
+    state.error = None;
+    state.add_model = None;
+    state.step = VendorLoginStep::CustomModels;
+    VendorLoginOutcome::Changed
+}
+
+fn open_add_model(state: &mut VendorLoginState) -> VendorLoginOutcome {
+    if !matches!(state.step, VendorLoginStep::CustomModels) {
+        return VendorLoginOutcome::Unchanged;
+    }
+    if state.custom.is_none() {
+        return VendorLoginOutcome::Unchanged;
+    }
+    state.add_model = Some(AddModelDraft::new());
+    state.error = None;
+    VendorLoginOutcome::Changed
+}
+
+fn toggle_selected_reasoning(state: &mut VendorLoginState) -> VendorLoginOutcome {
+    let Some(draft) = state.custom.as_mut() else {
+        return VendorLoginOutcome::Unchanged;
+    };
+    let Some(row) = draft.models.get_mut(draft.selected) else {
+        return VendorLoginOutcome::Unchanged;
+    };
+    row.supports_reasoning_effort = !row.supports_reasoning_effort;
+    VendorLoginOutcome::Changed
+}
+
+fn handle_add_model_key(state: &mut VendorLoginState, key: &KeyEvent) -> VendorLoginOutcome {
+    if matches!(key.code, KeyCode::Enter) {
+        return commit_add_model(state);
+    }
+    let Some(add) = state.add_model.as_mut() else {
+        return VendorLoginOutcome::Unchanged;
+    };
+    match key.code {
+        KeyCode::Tab | KeyCode::Down => {
+            add.cycle_field(true);
+            VendorLoginOutcome::Changed
+        }
+        KeyCode::BackTab | KeyCode::Up => {
+            add.cycle_field(false);
+            VendorLoginOutcome::Changed
+        }
+        KeyCode::Char(' ') if add.field == AddModelField::Reasoning => {
+            add.supports_reasoning_effort = !add.supports_reasoning_effort;
+            add.reasoning_touched = true;
+            VendorLoginOutcome::Changed
+        }
+        KeyCode::Left | KeyCode::Right if add.field == AddModelField::Reasoning => {
+            add.supports_reasoning_effort = !add.supports_reasoning_effort;
+            add.reasoning_touched = true;
+            VendorLoginOutcome::Changed
+        }
+        _ => {
+            let on_id = add.field == AddModelField::ApiModel;
+            let changed = match add.active_editor_mut() {
+                Some(editor) => !matches!(
+                    editor.handle_key(key),
+                    LineEditOutcome::Unhandled | LineEditOutcome::HandledNoChange
+                ),
+                None => return VendorLoginOutcome::Unchanged,
+            };
+            if !changed {
+                return VendorLoginOutcome::Unchanged;
+            }
+            if on_id {
+                add.refresh_suggestion();
+            }
+            add.error = None;
+            VendorLoginOutcome::Changed
+        }
+    }
+}
+
+fn commit_add_model(state: &mut VendorLoginState) -> VendorLoginOutcome {
+    let (api_model, name, context_window, supports_reasoning_effort) = {
+        let Some(add) = state.add_model.as_ref() else {
+            return VendorLoginOutcome::Unchanged;
+        };
+        (
+            add.api_model.text().trim().to_owned(),
+            add.name.text().trim().to_owned(),
+            add.context_window,
+            add.supports_reasoning_effort,
+        )
+    };
+    if api_model.is_empty() {
+        if let Some(add) = state.add_model.as_mut() {
+            add.error = Some("Model id is required".into());
+        }
+        return VendorLoginOutcome::Changed;
+    }
+    let duplicate = state.custom.as_ref().is_some_and(|draft| {
+        draft
+            .models
+            .iter()
+            .any(|m| m.api_model.eq_ignore_ascii_case(&api_model))
+    });
+    if duplicate {
+        if let Some(add) = state.add_model.as_mut() {
+            add.error = Some(format!("Already in the list: {api_model}"));
+        }
+        return VendorLoginOutcome::Changed;
+    }
+    let pick = CustomModelPick {
+        api_model,
+        name,
+        context_window,
+        supports_reasoning_effort,
+        enabled: true,
+    };
+    let Some(draft) = state.custom.as_mut() else {
+        return VendorLoginOutcome::Unchanged;
+    };
+    draft.models.push(pick);
+    draft.selected = draft.models.len() - 1;
+    draft.search_focused = false;
+    draft.clamp_selection_to_filter();
+    state.add_model = None;
+    state.error = None;
+    VendorLoginOutcome::Changed
+}
+
 fn submit_custom_save(state: &mut VendorLoginState) -> VendorLoginOutcome {
     let Some(draft) = state.custom.as_ref() else {
         return VendorLoginOutcome::Unchanged;
@@ -1277,18 +1598,7 @@ fn submit_custom_save(state: &mut VendorLoginState) -> VendorLoginOutcome {
     } else {
         "bearer".to_owned()
     };
-    let models = draft
-        .models
-        .iter()
-        .map(|m| {
-            (
-                m.api_model.clone(),
-                m.name.clone(),
-                m.context_window,
-                m.enabled,
-            )
-        })
-        .collect();
+    let models = draft.models.iter().map(|m| m.to_custom_model()).collect();
     state.probing = true;
     VendorLoginOutcome::SaveCustom {
         provider_id: draft.id.clone(),
@@ -1367,6 +1677,9 @@ fn submit_key(state: &mut VendorLoginState) -> VendorLoginOutcome {
 }
 
 fn title_for(state: &VendorLoginState) -> String {
+    if state.add_model.is_some() {
+        return "Add model".into();
+    }
     match &state.step {
         VendorLoginStep::Pick { .. } => "Sign in · Providers".into(),
         VendorLoginStep::CustomForm => {
@@ -1417,6 +1730,9 @@ pub(crate) fn render_vendor_login_modal(
         VendorLoginStep::Key { .. } => render_key_form(buf, areas.content, state, &theme),
         VendorLoginStep::OAuthWait { .. } => render_oauth_wait(buf, areas.content, state, &theme),
         VendorLoginStep::CustomForm => render_custom_form(buf, areas.content, state, &theme),
+        VendorLoginStep::CustomModels if state.add_model.is_some() => {
+            render_add_model(buf, areas.content, state, &theme)
+        }
         VendorLoginStep::CustomModels => render_custom_models(buf, areas.content, state, &theme),
     }
 }
@@ -1718,7 +2034,7 @@ fn render_custom_form(buf: &mut Buffer, area: Rect, state: &VendorLoginState, th
         } else if let Some(err) = &state.error {
             err.as_str()
         } else {
-            "Tab fields · Enter sync models"
+            "Tab fields · Enter sync · ^Enter skip list"
         };
         let style = if state.error.is_some() {
             Style::default().fg(theme.accent_error)
@@ -1728,6 +2044,104 @@ fn render_custom_form(buf: &mut Buffer, area: Rect, state: &VendorLoginState, th
             Style::default().fg(theme.gray_bright)
         };
         let text = truncate_str(hint, area.width as usize);
+        let tw = text.width() as u16;
+        buf.set_span(area.x, hint_y, &Span::styled(text, style), tw);
+    }
+}
+
+fn render_add_model(buf: &mut Buffer, area: Rect, state: &mut VendorLoginState, theme: &Theme) {
+    let Some(add) = state.add_model.as_ref() else {
+        return;
+    };
+    if area.height == 0 {
+        return;
+    }
+    render_labeled_input(
+        buf,
+        area,
+        area.y,
+        "Model id",
+        &add.api_model,
+        add.field == AddModelField::ApiModel,
+        false,
+        theme,
+    );
+    if area.y + 2 < area.y + area.height {
+        render_labeled_input(
+            buf,
+            area,
+            area.y + 2,
+            "Name",
+            &add.name,
+            add.field == AddModelField::Name,
+            false,
+            theme,
+        );
+    }
+    let reasoning_y = area.y + 4;
+    if reasoning_y < area.y + area.height {
+        let focused = add.field == AddModelField::Reasoning;
+        let bg = if focused {
+            theme.bg_visual
+        } else {
+            theme.bg_base
+        };
+        let row = Rect {
+            x: area.x,
+            y: reasoning_y,
+            width: area.width,
+            height: 1,
+        };
+        buf.set_style(row, Style::default().bg(bg));
+        let mark = if add.supports_reasoning_effort {
+            "[x]"
+        } else {
+            "[ ]"
+        };
+        let line = format!("Reasoning: {mark}   Space");
+        buf.set_span(
+            area.x,
+            reasoning_y,
+            &Span::styled(
+                truncate_str(&line, area.width as usize),
+                Style::default().fg(theme.text_primary).bg(bg),
+            ),
+            area.width,
+        );
+    }
+    let hint_y = area.y + 6;
+    if hint_y < area.y + area.height {
+        let hint = if let Some(err) = add.error.as_deref() {
+            err.to_owned()
+        } else if add.api_model.text().trim().is_empty() {
+            "Wire id sent to the provider".to_owned()
+        } else if add.matched {
+            format!(
+                "models.dev · {}k ctx{}",
+                add.context_window / 1000,
+                if add.supports_reasoning_effort {
+                    " · reasoning"
+                } else {
+                    ""
+                }
+            )
+        } else {
+            format!(
+                "unknown to models.dev · {}k ctx{}",
+                add.context_window / 1000,
+                if add.supports_reasoning_effort {
+                    " · reasoning on"
+                } else {
+                    " · reasoning off"
+                }
+            )
+        };
+        let style = if add.error.is_some() {
+            Style::default().fg(theme.accent_error)
+        } else {
+            Style::default().fg(theme.gray_bright)
+        };
+        let text = truncate_str(&hint, area.width as usize);
         let tw = text.width() as u16;
         buf.set_span(area.x, hint_y, &Span::styled(text, style), tw);
     }
@@ -1851,10 +2265,15 @@ fn render_custom_models(buf: &mut Buffer, area: Rect, state: &mut VendorLoginSta
             }
         }
         let mark = if row.enabled { "[x]" } else { "[ ]" };
-        let label = if row.name.is_empty() {
-            format!("{mark} {}", row.api_model)
+        let think = if row.supports_reasoning_effort {
+            "  think"
         } else {
-            format!("{mark} {}  {}", row.api_model, row.name)
+            ""
+        };
+        let label = if row.name.is_empty() {
+            format!("{mark} {}{think}", row.api_model)
+        } else {
+            format!("{mark} {}  {}{think}", row.api_model, row.name)
         };
         let style = if focused {
             Style::default()
@@ -1886,8 +2305,10 @@ fn render_custom_models(buf: &mut Buffer, area: Rect, state: &mut VendorLoginSta
             err.to_owned()
         } else if !query.trim().is_empty() {
             format!("{enabled_n}/{total_n} enabled · {} shown", filtered.len())
+        } else if total_n == 0 {
+            "No models — press i to add".to_owned()
         } else {
-            format!("{enabled_n}/{total_n} enabled · Space toggle")
+            format!("{enabled_n}/{total_n} enabled · Space toggle · r reasoning · i add")
         };
         let style = if error.is_some() {
             Style::default().fg(theme.accent_error)
@@ -2290,8 +2711,8 @@ mod tests {
                 ..
             } => {
                 assert!(provider_id.is_none());
-                assert!(!models[0].3);
-                assert!(models[1].3);
+                assert!(!models[0].enabled);
+                assert!(models[1].enabled);
             }
             other => panic!("expected SaveCustom, got {other:?}"),
         }
@@ -2397,6 +2818,118 @@ mod tests {
         match handle_vendor_login_key(&mut state, &key(KeyCode::Enter)) {
             VendorLoginOutcome::SaveCustom { provider_id, .. } => {
                 assert_eq!(provider_id.as_deref(), Some("acme"));
+            }
+            other => panic!("expected SaveCustom, got {other:?}"),
+        }
+    }
+
+    fn fill_custom_form(state: &mut VendorLoginState) {
+        let _ = handle_vendor_login_paste(state, "Acme");
+        let _ = handle_vendor_login_key(state, &key(KeyCode::Tab));
+        let _ = handle_vendor_login_paste(state, "acme.example/v1");
+        let _ = handle_vendor_login_key(state, &key(KeyCode::Tab));
+        let _ = handle_vendor_login_key(state, &key(KeyCode::Tab));
+        let _ = handle_vendor_login_paste(state, "sk-test");
+    }
+
+    #[test]
+    fn custom_sync_error_keeps_models_step() {
+        let mut state = VendorLoginState::custom_form();
+        fill_custom_form(&mut state);
+        state.apply_custom_models(
+            vec![],
+            Some("404 from https://acme.example/v1/models".into()),
+        );
+        assert!(matches!(state.step, VendorLoginStep::CustomModels));
+        assert!(state.custom.as_ref().unwrap().models.is_empty());
+        assert!(state.error.as_ref().is_some_and(|e| e.contains("404")));
+    }
+
+    #[test]
+    fn custom_sync_error_preserves_existing_models() {
+        let mut state = VendorLoginState::custom_form();
+        state.apply_custom_models(vec![("keep".into(), "Keep".into(), 32_000)], None);
+        state.apply_custom_models(vec![], Some("couldn't list models".into()));
+        assert!(matches!(state.step, VendorLoginStep::CustomModels));
+        assert_eq!(state.custom.as_ref().unwrap().models.len(), 1);
+        assert_eq!(state.custom.as_ref().unwrap().models[0].api_model, "keep");
+    }
+
+    #[test]
+    fn custom_form_ctrl_enter_skips_sync() {
+        let mut state = VendorLoginState::custom_form();
+        fill_custom_form(&mut state);
+        let out = handle_vendor_login_key(&mut state, &ctrl(KeyCode::Enter));
+        assert!(matches!(out, VendorLoginOutcome::Changed));
+        assert!(matches!(state.step, VendorLoginStep::CustomModels));
+        assert!(!state.probing);
+        assert!(state.custom.as_ref().unwrap().models.is_empty());
+    }
+
+    #[test]
+    fn custom_models_add_and_dedupe() {
+        let mut state = VendorLoginState::custom_form();
+        fill_custom_form(&mut state);
+        let _ = handle_vendor_login_key(&mut state, &ctrl(KeyCode::Enter));
+        let out = handle_vendor_login_key(&mut state, &key(KeyCode::Char('i')));
+        assert!(matches!(out, VendorLoginOutcome::Changed));
+        assert!(state.add_model.is_some());
+        let _ = handle_vendor_login_paste(&mut state, "proxy-mystery-v1");
+        match handle_vendor_login_key(&mut state, &key(KeyCode::Enter)) {
+            VendorLoginOutcome::Changed => {}
+            other => panic!("expected Changed after add, got {other:?}"),
+        }
+        assert!(state.add_model.is_none());
+        let draft = state.custom.as_ref().unwrap();
+        assert_eq!(draft.models.len(), 1);
+        assert_eq!(draft.models[0].api_model, "proxy-mystery-v1");
+        assert!(draft.models[0].enabled);
+        assert!(!draft.models[0].supports_reasoning_effort);
+
+        let _ = handle_vendor_login_key(&mut state, &key(KeyCode::Char('i')));
+        let _ = handle_vendor_login_paste(&mut state, "proxy-mystery-v1");
+        let _ = handle_vendor_login_key(&mut state, &key(KeyCode::Enter));
+        assert!(
+            state
+                .add_model
+                .as_ref()
+                .unwrap()
+                .error
+                .as_ref()
+                .is_some_and(|e| e.contains("Already"))
+        );
+        assert_eq!(state.custom.as_ref().unwrap().models.len(), 1);
+    }
+
+    #[test]
+    fn custom_models_add_matches_models_dev() {
+        let mut state = VendorLoginState::custom_form();
+        fill_custom_form(&mut state);
+        let _ = handle_vendor_login_key(&mut state, &ctrl(KeyCode::Enter));
+        let _ = handle_vendor_login_key(&mut state, &key(KeyCode::Char('i')));
+        let _ = handle_vendor_login_paste(&mut state, "gpt-5.6-sol");
+        let add = state.add_model.as_ref().unwrap();
+        assert!(add.matched);
+        assert!(add.supports_reasoning_effort);
+        assert_eq!(add.context_window, 1_050_000);
+        let _ = handle_vendor_login_key(&mut state, &key(KeyCode::Enter));
+        let row = &state.custom.as_ref().unwrap().models[0];
+        assert!(row.supports_reasoning_effort);
+        assert_eq!(row.context_window, 1_050_000);
+    }
+
+    #[test]
+    fn custom_models_r_toggles_reasoning_and_save_keeps_it() {
+        let mut state = VendorLoginState::custom_form();
+        fill_custom_form(&mut state);
+        state.apply_custom_models(vec![("proxy-mystery-v1".into(), "".into(), 128_000)], None);
+        assert!(!state.custom.as_ref().unwrap().models[0].supports_reasoning_effort);
+        let _ = handle_vendor_login_key(&mut state, &key(KeyCode::Char('r')));
+        assert!(state.custom.as_ref().unwrap().models[0].supports_reasoning_effort);
+        match handle_vendor_login_key(&mut state, &key(KeyCode::Enter)) {
+            VendorLoginOutcome::SaveCustom { models, .. } => {
+                assert!(models[0].supports_reasoning_effort);
+                assert_eq!(models[0].api_model, "proxy-mystery-v1");
             }
             other => panic!("expected SaveCustom, got {other:?}"),
         }

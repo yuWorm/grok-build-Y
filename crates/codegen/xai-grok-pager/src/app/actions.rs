@@ -9,6 +9,7 @@ use super::agent::AgentId;
 use crate::app::status_line::StatusLineRun;
 use crate::scrollback::entry::EntryId;
 use agent_client_protocol as acp;
+use xai_grok_shell::compat::custom::CustomModel;
 use xai_grok_shell::sampling::types::ReasoningEffort;
 use xai_grok_shell::session::unified_list::SessionKind;
 /// Typed error for model switch failures.
@@ -425,7 +426,7 @@ pub enum Action {
     ToggleYolo,
     /// Set YOLO (auto-approve / `always-approve`) mode.
     SetYoloMode(bool),
-    /// Session Fast mode (`service_tier=priority` on official OpenAI / Codex).
+    /// Session Fast mode (`service_tier=priority` on GPT / official OpenAI / Codex).
     SetFastMode(bool),
     /// Set the permission mode by canonical kind (`always-approve` / `ask` / `default`).
     /// Typed wrapper over [`Action::SetYoloMode`] that preserves the `default` canonical (the `bool` variant collapses `default` to `ask`).
@@ -650,7 +651,7 @@ pub enum Action {
         api_backend: String,
         auth_scheme: String,
         key: String,
-        models: Vec<(String, String, u64, bool)>,
+        models: Vec<CustomModel>,
     },
     /// Fetch models.dev (reasoning + context/output limits) into `~/.grok`.
     SyncModelsDev,
@@ -1740,7 +1741,7 @@ pub enum Effect {
         api_backend: String,
         auth_scheme: String,
         key: String,
-        models: Vec<(String, String, u64, bool)>,
+        models: Vec<CustomModel>,
     },
     /// GET https://models.dev/api.json and persist the compact overlay.
     SyncModelsDev,

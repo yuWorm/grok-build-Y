@@ -679,7 +679,7 @@ pub struct AgentSession {
     /// Whether YOLO mode (auto-approve all permissions) is active.
     /// Read via `is_yolo()`, write via `set_yolo_mode_inner`.
     pub(crate) yolo_mode: bool,
-    /// Session Fast mode (`service_tier=priority` on official OpenAI / Codex).
+    /// Session Fast mode (`service_tier=priority` on GPT / official OpenAI / Codex).
     pub(crate) fast_mode: bool,
     /// Whether Auto (LLM classifier) permission mode is active for this session.
     /// Display-only mirror of the applied permission mode, read via `is_auto()`.

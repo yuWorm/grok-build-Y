@@ -9,7 +9,7 @@ plus ChatGPT Codex OAuth.
 
 The CLI binary is **`groky`**. It can sit next to official `grok`.
 
-Latest release: [v0.1.11](https://github.com/yuWorm/groky/releases/tag/v0.1.11)
+Latest release: [v0.1.12](https://github.com/yuWorm/groky/releases/tag/v0.1.12)
 
 ## Install
 
@@ -46,7 +46,7 @@ groky
 | Claude Pro/Max (not an `sk-ant-` key) | `/provider-login anthropic-claude` |
 | Custom OpenAI-compatible endpoint | `/provider-login` → custom provider |
 | Switch model | `/model` |
-| Fast mode (official OpenAI / Codex) | `/fast` |
+| Fast mode (GPT, including custom OpenAI-compatible relays) | `/fast` |
 | Drop a vendor key | `/provider-logout` |
 | Refresh vendor model lists | `/sync-models-dev` |
 | Update groky | `groky update` (Welcome: ctrl+u) |

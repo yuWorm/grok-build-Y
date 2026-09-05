@@ -677,7 +677,11 @@ impl SessionActor {
             crate::compat::oauth::inject_request_headers(id, &mut extra_headers);
         }
         // GROK_COMPAT_HOOK: session Fast mode as a sampler-stripped extra header.
-        if self.fast_mode.get() && crate::compat::url_supports_openai_fast(&cfg.base_url) {
+        // Official OpenAI/Codex hosts, or a GPT wire/catalog id on a relay.
+        if self.fast_mode.get()
+            && (crate::compat::url_supports_openai_fast(&cfg.base_url)
+                || crate::compat::model_supports_openai_fast(cfg.model.as_str()))
+        {
             extra_headers.insert(
                 crate::compat::GROKY_SERVICE_TIER_HEADER.to_string(),
                 crate::compat::OPENAI_FAST_SERVICE_TIER.to_string(),

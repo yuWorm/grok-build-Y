@@ -240,6 +240,62 @@ pub(crate) fn apply_overlay_to_vendor_entries(models: &mut IndexMap<String, Mode
     }
 }
 
+/// Prefill for the custom-provider "add model" form: context window and
+/// whether models.dev knows a reasoning menu. Unknown ids stay 128k / off.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SuggestedModel {
+    pub context_window: u64,
+    pub supports_reasoning_effort: bool,
+    pub matched: bool,
+}
+
+pub fn suggest_model(api_model: &str) -> SuggestedModel {
+    match lookup_meta(api_model) {
+        Some(meta) => SuggestedModel {
+            context_window: meta.context_window.unwrap_or(128_000),
+            supports_reasoning_effort: meta.reasoning.is_some(),
+            matched: true,
+        },
+        None => SuggestedModel {
+            context_window: 128_000,
+            supports_reasoning_effort: false,
+            matched: false,
+        },
+    }
+}
+
+fn default_reasoning_options() -> Vec<ReasoningEffortOption> {
+    vec![
+        option(ReasoningEffort::Low, false),
+        option(ReasoningEffort::Medium, true),
+        option(ReasoningEffort::High, false),
+    ]
+}
+
+/// Merge models.dev limits with the user's reasoning toggle for a custom model.
+///
+/// Overlay always fills context / output cap. Reasoning is the user's choice:
+/// on + unknown to models.dev gets a generic low/medium/high menu; off strips
+/// any overlay menu so a false-positive cannot force `/effort`.
+pub fn apply_custom_model_meta(
+    info: &mut ModelInfo,
+    api_model: &str,
+    supports_reasoning_effort: bool,
+) {
+    apply_to_model_info(info, api_model);
+    if supports_reasoning_effort {
+        info.supports_reasoning_effort = true;
+        if info.reasoning_efforts.is_empty() {
+            info.reasoning_efforts = default_reasoning_options();
+            info.reasoning_effort = Some(ReasoningEffort::Medium);
+        }
+    } else {
+        info.supports_reasoning_effort = false;
+        info.reasoning_efforts.clear();
+        info.reasoning_effort = None;
+    }
+}
+
 fn overlay_entry(key: &str) -> Option<SnapshotEntry> {
     #[cfg(test)]
     {
@@ -540,8 +596,8 @@ fn option(effort: ReasoningEffort, default: bool) -> ReasoningEffortOption {
 #[cfg(test)]
 mod tests {
     use super::{
-        SnapshotEntry, apply_to_model_info, compact_catalog, lookup, lookup_meta,
-        normalize_model_id, set_test_overlay,
+        SnapshotEntry, apply_custom_model_meta, apply_to_model_info, compact_catalog, lookup,
+        lookup_meta, normalize_model_id, set_test_overlay, suggest_model,
     };
     use crate::agent::config::ModelInfo;
     use std::collections::HashMap;
@@ -713,5 +769,36 @@ mod tests {
         assert!(!info.supports_reasoning_effort);
         assert_eq!(info.context_window.get(), 128_000);
         assert_eq!(info.max_completion_tokens, Some(16_384));
+    }
+
+    #[test]
+    fn suggest_model_matches_snapshot_and_unknown() {
+        let sol = suggest_model("gpt-5.6-sol");
+        assert!(sol.matched);
+        assert!(sol.supports_reasoning_effort);
+        assert_eq!(sol.context_window, 1_050_000);
+
+        let unknown = suggest_model("proxy-mystery-v1");
+        assert!(!unknown.matched);
+        assert!(!unknown.supports_reasoning_effort);
+        assert_eq!(unknown.context_window, 128_000);
+    }
+
+    #[test]
+    fn custom_meta_user_off_strips_overlay_reasoning() {
+        let mut info = ModelInfo::fallback("gpt-5.6-sol");
+        apply_custom_model_meta(&mut info, "gpt-5.6-sol", false);
+        assert!(!info.supports_reasoning_effort);
+        assert!(info.reasoning_efforts.is_empty());
+        assert_eq!(info.context_window.get(), 1_050_000);
+    }
+
+    #[test]
+    fn custom_meta_user_on_unknown_gets_default_menu() {
+        let mut info = ModelInfo::fallback("proxy-mystery-v1");
+        apply_custom_model_meta(&mut info, "proxy-mystery-v1", true);
+        assert!(info.supports_reasoning_effort);
+        assert_eq!(info.reasoning_efforts.len(), 3);
+        assert_eq!(info.reasoning_effort, Some(ReasoningEffort::Medium));
     }
 }

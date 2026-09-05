@@ -1,7 +1,8 @@
-//! `/fast`: toggle OpenAI / Codex priority service tier for this session.
+//! `/fast`: toggle OpenAI-compatible priority service tier for this session.
 //!
-//! Official `openai` (Chat Completions) and `openai-codex` (Responses) only.
-//! Off by default; not written to `config.toml`. Claude `-fast` models are unrelated.
+//! Official `openai` / `openai-codex`, and any GPT wire id (`gpt-4o`,
+//! `acme/gpt-5`) including custom OpenAI-compatible relays. Off by default;
+//! not written to `config.toml`. Claude `-fast` models are unrelated.
 
 use crate::app::actions::Action;
 use crate::slash::command::{
@@ -9,14 +10,14 @@ use crate::slash::command::{
 };
 use xai_grok_shell::compat::model_supports_openai_fast;
 
-const UNAVAILABLE: &str = "Fast mode is only available on OpenAI and Codex.";
+const UNAVAILABLE: &str = "Fast mode is only available on GPT models.";
 
 pub struct FastCommand;
 
 impl SlashCommand for FastCommand {
     slash_meta! {
         name: "fast",
-        description: "Toggle Fast mode (OpenAI / Codex priority)",
+        description: "Toggle Fast mode (GPT priority service_tier)",
         usage: "/fast [on|off]",
         takes_args: true,
         session_scoped: true,
@@ -111,6 +112,15 @@ mod tests {
         models
     }
 
+    fn custom_gpt_models() -> ModelState {
+        let id = acp::ModelId::new(Arc::from("acme/gpt-4o"));
+        let info = acp::ModelInfo::new(id.clone(), "Acme · GPT-4o".to_string());
+        let mut models = ModelState::default();
+        models.available.insert(id.clone(), info);
+        models.current = Some(id);
+        models
+    }
+
     fn exec<'a>(
         models: &'a ModelState,
         bundle: &'a BundleState,
@@ -150,8 +160,10 @@ mod tests {
     fn hidden_on_grok_visible_on_openai() {
         let grok = grok_models();
         let openai = openai_models();
+        let custom = custom_gpt_models();
         assert!(!FastCommand.visible(&app_ctx(&grok)));
         assert!(FastCommand.visible(&app_ctx(&openai)));
+        assert!(FastCommand.visible(&app_ctx(&custom)));
     }
 
     #[test]
@@ -168,6 +180,18 @@ mod tests {
         assert!(matches!(
             FastCommand.run(&mut ctx, ""),
             CommandResult::Action(Action::SetFastMode(false))
+        ));
+    }
+
+    #[test]
+    fn toggle_on_custom_gpt() {
+        let models = custom_gpt_models();
+        let bundle = BundleState::default();
+        let sid = acp::SessionId::new("s1");
+        let mut ctx = exec(&models, &bundle, &sid, false);
+        assert!(matches!(
+            FastCommand.run(&mut ctx, ""),
+            CommandResult::Action(Action::SetFastMode(true))
         ));
     }
 
@@ -200,11 +224,11 @@ mod tests {
         let CommandResult::Error(msg) = FastCommand.run(&mut ctx, "") else {
             panic!("expected unavailable");
         };
-        assert!(msg.contains("OpenAI"));
+        assert!(msg.contains("GPT"));
         let CommandResult::Error(msg) = FastCommand.run(&mut ctx, "on") else {
             panic!("expected unavailable");
         };
-        assert!(msg.contains("OpenAI"));
+        assert!(msg.contains("GPT"));
         assert!(matches!(
             FastCommand.run(&mut ctx, "off"),
             CommandResult::Action(Action::SetFastMode(false))

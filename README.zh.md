@@ -8,7 +8,7 @@ agent、tools、MCP、ACP、TUI 与官方同一套，额外支持第三方模型
 
 命令行二进制是 **`groky`**，可以和官方 `grok` 并存。
 
-最新版本：[v0.1.11](https://github.com/yuWorm/groky/releases/tag/v0.1.11)
+最新版本：[v0.1.12](https://github.com/yuWorm/groky/releases/tag/v0.1.12)
 
 ## 安装
 
@@ -44,7 +44,7 @@ groky
 | Claude Pro/Max（不是 `sk-ant-`） | `/provider-login anthropic-claude` |
 | 自定义 OpenAI 兼容端点 | `/provider-login` → 自定义供应商 |
 | 切换模型 | `/model` |
-| Fast 模式（官方 OpenAI / Codex） | `/fast` |
+| Fast 模式（GPT，含自定义 OpenAI 兼容中转站） | `/fast` |
 | 去掉供应商密钥 | `/provider-logout` |
 | 刷新供应商模型列表 | `/sync-models-dev` |
 | 更新 groky | `groky update`（Welcome：ctrl+u） |

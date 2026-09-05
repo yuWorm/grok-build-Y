@@ -376,7 +376,7 @@ struct ClientDefaults {
     doom_loop_recovery: Option<xai_grok_sampling_types::DoomLoopRecoveryPolicy>,
     /// Claude Pro/Max OAuth fingerprint (Bearer `sk-ant-oat` / oauth beta).
     claude_oauth: bool,
-    /// Session Fast mode (`priority`) for official OpenAI / Codex only.
+    /// Session Fast mode (`priority`) for GPT models and official OpenAI / Codex.
     service_tier: Option<String>,
 }
 
@@ -893,7 +893,7 @@ impl SamplingClient {
         }
 
         if request.service_tier.is_none()
-            && crate::compat::official_openai_fast_url(&self.base_url)
+            && crate::compat::allows_openai_service_tier(&self.base_url)
         {
             request.service_tier = self.defaults.service_tier.clone();
         }
